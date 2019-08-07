@@ -17,7 +17,6 @@ typedef enum {
   T_LPAREN,
   T_RPAREN,
   T_LBRACKET,
-  T_SUBSCRIPT = T_LBRACKET,
   T_RBRACKET,
   T_LCURLY,
   T_RCURLY,
@@ -50,10 +49,8 @@ typedef enum {
   T_COMP_FIRST = T_NOT_EQUALS,
   T_EQUALS,
   T_LESS,
-  T_DEREF = T_LESS,
   T_LESS_EQUALS,
   T_GREATER,
-  T_REF = T_GREATER,
   T_GREATER_EQUALS,
   T_COMP_LAST = T_GREATER_EQUALS,
   
@@ -89,6 +86,9 @@ typedef enum {
   T_IF,
   T_KEYWORD_LAST = T_IF,
   
+  T_SUBSCRIPT = T_LBRACKET,
+  T_DEREF = T_LESS,
+  T_REF = T_MUL,
 } Token_Kind;
 
 String Token_Kind_To_String[] = {
@@ -378,6 +378,13 @@ Token *tokenize(Arena *arena, String src) {
             skip(1);
           }
           skip(2);
+        } else {
+          eat();
+          if (*stream == '=') {
+            end(T_DIV_ASSIGN);
+          } else {
+            end(T_DIV);
+          }
         }
       } break;
       

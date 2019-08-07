@@ -90,7 +90,7 @@ Token parser_expect(Parser *p, Token_Kind kind) {
 
 
 Code_Expr *parse_expr(Parser *p);
-Code_Type *parse_type(Parser *p, b32 is_pointer);
+Code_Type *parse_type(Parser *p);
 Code_Stmt_Decl *parse_decl(Parser *p);
 Code_Stmt_Block *parse_stmt_block(Parser *p);
 
@@ -111,19 +111,19 @@ Code_Type_Func *parse_type_func(Parser *p) {
     }
   }
   
-  Code_Type *return_type = parse_type(p, false);
+  Code_Type *return_type = parse_type(p);
   
   result = code_type_func(p, params, return_type);
   return result;
 }
 
-Code_Type *parse_type(Parser *p, b32 is_pointer) {
+Code_Type *parse_type(Parser *p) {
   Code_Type *result = 0;
   if (parser_accept(p, T_NAME)) {
     String name = parser_prev(p).value;
     result = (Code_Type *)code_type_alias(p, name);
-  } else if (parser_accept(p, T_GREATER)) {
-    Code_Type *base = parse_type(p, /*is_pointer*/ true);
+  } else if (parser_accept(p, T_REF)) {
+    Code_Type *base = parse_type(p);
     result = (Code_Type *)code_type_pointer(p, base);
   } else if (parser_accept(p, T_STRUCT)) {
     parser_expect(p, T_LCURLY);
@@ -150,11 +150,14 @@ Code_Type *parse_type(Parser *p, b32 is_pointer) {
     Token t_count = parser_expect(p, T_INT);
     u64 count = string_to_u64(t_count.value);
     parser_expect(p, T_RBRACKET);
-    Code_Type *element_type = parse_type(p, false);
+    Code_Type *element_type = parse_type(p);
     
     result = (Code_Type *)code_type_array(p, element_type, count);
   } else if (parser_peek(p, 0, T_FUNC)) {
     result = (Code_Type *)parse_type_func(p);
+  } else if (parser_accept(p, T_LPAREN)) {
+    result = (Code_Type *)parse_type(p);
+    parser_expect(p, T_RPAREN);
   }
   return result;
 }
@@ -223,7 +226,7 @@ Code_Stmt *parse_stmt(Parser *p) {
       parser_expect(p, T_SEMI);
       result = (Code_Stmt *)code_stmt_assign(p, left, op, right);
     } else {
-      syntax_error("Expected an assignment statement\n");
+      syntax_error("Expected an assignment statement or an expression.\n");
     }
   }
   
@@ -255,29 +258,39 @@ Code_Expr *parse_expr_atom(Parser *p) {
 }
 
 Code_Expr *parse_expr_call(Parser *p) {
-  Code_Expr *result = parse_expr_atom(p);
+  Code_Expr *result = 0;
   
-  while (true) {
-    if (parser_accept(p, T_DOT)) {
-      Code_Expr *right = parse_expr_atom(p);
-      result = (Code_Expr *)code_expr_binary(p, result, T_MEMBER, right);
-    } else if (parser_accept(p, T_LBRACKET)) {
-      Code_Expr *right = parse_expr(p);
-      parser_expect(p, T_RBRACKET);
-      result = (Code_Expr *)code_expr_binary(p, result, T_SUBSCRIPT, right);
-    } else if (parser_accept(p, T_LPAREN)) {
-      Code_Expr **args = sb_new(p->arena, Code_Expr *, 8);
-      while (!parser_accept(p, T_RPAREN)) {
-        Code_Expr *arg = parse_expr(p);
-        sb_push(args, arg);
-        if (!parser_accept(p, T_COMMA)) {
-          parser_expect(p, T_RPAREN);
-          break;
+  i32 prev_pos = p->i;
+  Code_Type *cast_type = parse_type(p);
+  if (cast_type && parser_accept(p, T_LPAREN)) {
+    Code_Expr *expr = parse_expr(p);
+    parser_expect(p, T_RPAREN);
+    result = (Code_Expr *)code_expr_cast(p, cast_type, expr);
+  } else {
+    p->i = prev_pos;
+    result = parse_expr_atom(p);
+    while (true) {
+      if (parser_accept(p, T_DOT)) {
+        Code_Expr *right = parse_expr_atom(p);
+        result = (Code_Expr *)code_expr_binary(p, result, T_MEMBER, right);
+      } else if (parser_accept(p, T_LBRACKET)) {
+        Code_Expr *right = parse_expr(p);
+        parser_expect(p, T_RBRACKET);
+        result = (Code_Expr *)code_expr_binary(p, result, T_SUBSCRIPT, right);
+      } else if (parser_accept(p, T_LPAREN)) {
+        Code_Expr **args = sb_new(p->arena, Code_Expr *, 8);
+        while (!parser_accept(p, T_RPAREN)) {
+          Code_Expr *arg = parse_expr(p);
+          sb_push(args, arg);
+          if (!parser_accept(p, T_COMMA)) {
+            parser_expect(p, T_RPAREN);
+            break;
+          }
         }
+        result = (Code_Expr *)code_expr_call(p, result, args);
+      } else {
+        break;
       }
-      result = (Code_Expr *)code_expr_call(p, result, args);
-    } else {
-      break;
     }
   }
   return result;
@@ -289,7 +302,7 @@ Code_Expr *parse_expr_unary(Parser *p) {
       parser_accept(p, T_NOT) ||
       parser_accept(p, T_BIT_NOT) ||
       parser_accept(p, T_LESS) ||
-      parser_accept(p, T_GREATER)) {
+      parser_accept(p, T_REF)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *expr = parse_expr_unary(p);
     result = (Code_Expr *)code_expr_unary(p, op, expr);
@@ -349,6 +362,22 @@ Code_Expr *parse_expr(Parser *p) {
   return result;
 }
 
+Code_Node *parse_expr_or_type(Parser *p) {
+  i32 prev_pos = p->i;
+  Code_Node *value = (Code_Node *)parse_type(p);
+  // NOTE(lvl5): foo := Bar or foo := >Bar
+  // can still be expressions even if here they are interpreted as 
+  // types
+  if (value && parser_peek(p, 0, T_LPAREN)) {
+    p->i = prev_pos;
+    value = (Code_Node *)parse_expr(p);
+  } else if (!value) {
+    p->i = prev_pos;
+    value = (Code_Node *)parse_expr(p);
+  }
+  return value;
+}
+
 Code_Stmt_Block *parse_stmt_block(Parser *p) {
   Code_Stmt_Block *result = 0;
   parser_expect(p, T_LCURLY);
@@ -361,33 +390,8 @@ Code_Stmt_Block *parse_stmt_block(Parser *p) {
   return result;
 }
 
-Code_Node *parse_decl_rhs(Parser *p) {
-  Code_Node *result = 0;
-  if (parser_peek(p, 0, T_FUNC)) {
-    Code_Type_Func *sig = parse_type_func(p);
-    if (parser_peek(p, 0, T_LCURLY)) {
-      Code_Stmt_Block *body = parse_stmt_block(p);
-      result = (Code_Node *)code_func(p, sig, body);
-    } else {
-      result = (Code_Node *)sig;
-    }
-  } else if (parser_peek(p, 0, T_NAME)) {
-    if (parser_peek(p, 1, T_SEMI)) {
-      result = (Code_Node *)parse_type(p, false);
-    } else {
-      result = (Code_Node *)parse_expr(p);
-    }
-  } else {
-    result = (Code_Node *)parse_type(p, false);
-    if (!result) {
-      result = (Code_Node *)parse_expr(p);
-    }
-  }
-  return result;
-}
 
 Code_Stmt_Decl *parse_decl(Parser *p) {
-  // TODO(lvl5): register name
   Code_Stmt_Decl *result = 0;
   if (parser_peek(p, 0, T_NAME) && parser_peek(p, 1, T_COLON)) {
     Token t_name = parser_expect(p, T_NAME);
@@ -399,11 +403,21 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
     Code_Node *value = 0;
     
     if (!parser_peek(p, 0, T_ASSIGN)) {
-      type = parse_type(p, false);
+      type = parse_type(p);
     }
     
     if (parser_accept(p, T_ASSIGN)) {
-      value = (Code_Node *)parse_decl_rhs(p);
+      if (parser_peek(p, 0, T_FUNC)) {
+        Code_Type_Func *sig = parse_type_func(p);
+        if (parser_peek(p, 0, T_LCURLY)) {
+          Code_Stmt_Block *body = parse_stmt_block(p);
+          value = (Code_Node *)code_func(p, sig, body);
+        } else {
+          value = (Code_Node *)sig;
+        }
+      } else {
+        value = parse_expr_or_type(p);
+      }
     }
     
     result = code_stmt_decl(p, name, type, value);

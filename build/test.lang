@@ -1,4 +1,68 @@
-foo := i32;
+Allocator := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte;
 
-wat := 43243;
-bar := wat;
+Arena := struct {
+  data:     *byte;
+  capacity: u64;
+  size:     u64;
+}
+
+arena_make := func(data: *byte, capacity: u64) Arena {
+  result: Arena;
+  result.data = data;
+  result.capacity = capacity;
+  return result;
+
+  //foo("fdsf", struct {a: i32}, 5435)
+}
+
+Context := struct {
+  allocator:      Allocator;
+  allocator_data: *void;
+  scratch:        Arena;
+}
+
+arena_alloc := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+  arena := (*Arena)(allocator_data);
+  if op == Alloc_Op.ALLOC {
+    result := arena.data + arena.size;
+    arena.size += size;
+    return result;
+  } else if op == Alloc_Op.FREE_ALL {
+    arena.size = 0;
+  }
+}
+
+main := func() i32 {
+  test := "blabla";
+}
+
+__string_make := func(data: *char, count: u64) string {
+  result: string;
+  result.data = data;
+  result.count = count;
+  return result;
+}
+
+
+string := struct {
+  data:  *char;
+  count: u64;
+}
+
+
+Alloc_Op := enum {
+  ALLOC;
+  REALLOC;
+  FREE;
+  FREE_ALL;
+}
+
+
+__Array_Dynamic := struct {
+  data:           *void;
+  count:          i32;
+  capacity:       i32;
+
+  allocator:      Allocator;
+  allocator_data: *void;
+}

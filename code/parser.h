@@ -1,69 +1,5 @@
 #include "lexer.h"
 
-typedef enum {
-  Type_Info_Kind_NONE,
-  
-  Type_Info_Kind_ARRAY,
-  Type_Info_Kind_POINTER,
-  Type_Info_Kind_STRUCT,
-  Type_Info_Kind_INT,
-  Type_Info_Kind_FLOAT,
-  Type_Info_Kind_TYPE,
-  Type_Info_Kind_ALIAS,
-  Type_Info_Kind_FUNC,
-} Type_Info_Kind;
-
-typedef struct Type_Info Type_Info;
-
-typedef struct {
-  Type_Info *item_type;
-  u64 count;
-} Type_Info_Array;
-
-typedef struct {
-  Type_Info *base;
-} Type_Info_Pointer;
-
-typedef struct {
-  String name;
-  Type_Info *type;
-} Type_Info_Struct_Member;
-
-typedef struct {
-  Type_Info_Struct_Member *members;
-} Type_Info_Struct;
-
-typedef struct {
-  b32 __;
-} Type_Info_Float;
-
-typedef struct {
-  b32 is_signed;
-} Type_Info_Int;
-
-typedef struct {
-  b32 __;
-} Type_Info_Type;
-
-typedef struct {
-  Type_Info **params;
-  Type_Info *return_type;
-} Type_Info_Func;
-
-struct Type_Info {
-  union {
-    Type_Info_Array array;
-    Type_Info_Pointer pointer;
-    Type_Info_Float float_t;
-    Type_Info_Int int_t;
-    Type_Info_Type type;
-    Type_Info_Func func;
-    Type_Info_Struct struct_t;
-  };
-  Type_Info_Kind kind;
-  i32 size;
-};
-
 
 typedef struct Code_Node Code_Node;
 typedef struct Code_Type Code_Type;
@@ -81,8 +17,6 @@ struct Scope {
   Scope_Entry *entries;
   Scope *parent;
 };
-
-
 
 
 typedef struct {
@@ -104,7 +38,6 @@ typedef struct {
   Code_Type *base;
 } Code_Type_Pointer;
 
-
 typedef struct {
   Code_Stmt_Decl **params;
   Code_Type *return_type;
@@ -113,6 +46,7 @@ typedef struct {
 typedef struct {
   String name;
 } Code_Type_Alias;
+
 
 
 typedef enum {
@@ -158,6 +92,11 @@ typedef struct {
 } Code_Expr_Call;
 
 typedef struct {
+  Code_Type *cast_type;
+  Code_Expr *expr;
+} Code_Expr_Cast_Or_Call, Code_Expr_Cast;
+
+typedef struct {
   i64 value;
 } Code_Expr_Int;
 
@@ -172,6 +111,8 @@ typedef struct {
 typedef enum {
   Expr_Kind_NONE,
   
+  Expr_Kind_CAST,
+  Expr_Kind_CAST_OR_CALL,
   Expr_Kind_UNARY,
   Expr_Kind_BINARY,
   Expr_Kind_CALL,
@@ -185,6 +126,8 @@ typedef enum {
 
 struct Code_Expr {
   union {
+    Code_Expr_Cast cast;
+    Code_Expr_Cast_Or_Call cast_or_call;
     Code_Expr_Name name;
     Code_Expr_Unary unary;
     Code_Expr_Binary binary;
@@ -280,7 +223,6 @@ struct Code_Stmt {
   Stmt_Kind kind;
 };
 
-
 typedef enum {
   Code_Kind_NONE,
   Code_Kind_ERROR,
@@ -289,6 +231,8 @@ typedef enum {
   Code_Kind_EXPR,
   Code_Kind_STMT,
   Code_Kind_FUNC,
+  
+  Code_Kind_TYPE_OR_EXPR,
 } Code_Kind;
 
 struct Code_Node {
@@ -422,6 +366,20 @@ Code_Expr_Unary *code_expr_unary(Parser *p, Token_Kind op, Code_Expr *val) {
   node->expr.unary.val = val;
   node->expr.unary.op = op;
   return (Code_Expr_Unary *)node;
+}
+
+Code_Expr_Cast *code_expr_cast(Parser *p, Code_Type *cast_type, Code_Expr *expr) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_CAST;
+  node->expr.cast.cast_type = cast_type;
+  node->expr.cast.expr = expr;
+  return (Code_Expr_Cast*)node;
+}
+
+Code_Expr_Cast_Or_Call *code_expr_cast_or_call(Parser *p, Code_Type *cast_type, Code_Expr *expr) {
+  Code_Expr_Cast_Or_Call *node = code_expr_cast(p, cast_type, expr);
+  ((Code_Expr *)node)->kind = Expr_Kind_CAST_OR_CALL;
+  return (Code_Expr_Cast_Or_Call *)node;
 }
 
 Code_Expr_Int *code_expr_int(Parser *p, i64 value) {
