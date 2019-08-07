@@ -27,6 +27,8 @@ typedef struct {
 
 typedef struct {
   String *members;
+  Scope *scope;
+  Code_Type *item_type;
 } Code_Type_Enum;
 
 typedef struct {
@@ -79,6 +81,7 @@ typedef struct {
   Code_Expr *left;
   Code_Expr *right;
   Token_Kind op;
+  b32 is_enum_member;
 } Code_Expr_Binary;
 
 typedef struct {
@@ -122,10 +125,12 @@ typedef enum {
   Expr_Kind_ARRAY,
   Expr_Kind_STRUCT,
   Expr_Kind_NAME,
+  Expr_Kind_TYPE,
 } Expr_Kind;
 
 struct Code_Expr {
   union {
+    Code_Type type_e;
     Code_Expr_Cast cast;
     Code_Expr_Cast_Or_Call cast_or_call;
     Code_Expr_Name name;
@@ -227,12 +232,9 @@ typedef enum {
   Code_Kind_NONE,
   Code_Kind_ERROR,
   
-  Code_Kind_TYPE,
   Code_Kind_EXPR,
   Code_Kind_STMT,
   Code_Kind_FUNC,
-  
-  Code_Kind_TYPE_OR_EXPR,
 } Code_Kind;
 
 struct Code_Node {
@@ -240,7 +242,6 @@ struct Code_Node {
     Code_Func func;
     Code_Stmt stmt;
     Code_Expr expr;
-    Code_Type type;
   };
   
   Code_Kind kind;
@@ -279,17 +280,19 @@ Code_Stmt_Decl *code_stmt_decl(Parser *p, String name, Code_Type *type, Code_Nod
 }
 
 Code_Type_Func *code_type_func(Parser *p, Code_Stmt_Decl **params, Code_Type *return_type) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_FUNC;
-  node->type.func.params = params;
-  node->type.func.return_type = return_type;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_FUNC;
+  node->expr.type_e.func.params = params;
+  node->expr.type_e.func.return_type = return_type;
   return (Code_Type_Func *)node;
 }
 
 Code_Type_Pointer *code_type_pointer(Parser *p, Code_Type *base) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_PTR;
-  node->type.pointer.base = base;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_PTR;
+  node->expr.type_e.pointer.base = base;
   return (Code_Type_Pointer *)node;
 }
 
@@ -308,31 +311,35 @@ Code_Expr_String *code_expr_string(Parser *p, String value) {
 }
 
 Code_Type_Struct *code_type_struct(Parser *p, Code_Stmt_Decl **members) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_STRUCT;
-  node->type.struct_t.members = members;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_STRUCT;
+  node->expr.type_e.struct_t.members = members;
   return (Code_Type_Struct *)node;
 }
 
 Code_Type_Array *code_type_array(Parser *p, Code_Type *item_type, u64 count) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_ARRAY;
-  node->type.array.item_type = item_type;
-  node->type.array.count = count;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_ARRAY;
+  node->expr.type_e.array.item_type = item_type;
+  node->expr.type_e.array.count = count;
   return (Code_Type_Array *)node;
 }
 
 Code_Type_Enum *code_type_enum(Parser *p, String *members) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_ENUM;
-  node->type.enum_t.members = members;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_ENUM;
+  node->expr.type_e.enum_t.members = members;
   return (Code_Type_Enum *)node;
 }
 
 Code_Type_Alias *code_type_alias(Parser *p, String alias) {
-  Code_Node *node = code_node(p, Code_Kind_TYPE);
-  node->type.kind = Type_Kind_ALIAS;
-  node->type.alias.name = alias;
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_ALIAS;
+  node->expr.type_e.alias.name = alias;
   return (Code_Type_Alias *)node;
 }
 

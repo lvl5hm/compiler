@@ -24,11 +24,11 @@ Context := struct {
 arena_alloc := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
   arena := (*Arena)(allocator_data);
   if op == Alloc_Op.ALLOC {
-    result := arena.data + arena.size;
+    result := arena.data; // TODO pointer arithmetic, right now this is wrong
     arena.size += size;
     return result;
   } else if op == Alloc_Op.FREE_ALL {
-    arena.size = 0;
+    arena.size = u64(0);
   }
 }
 

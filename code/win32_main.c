@@ -38,6 +38,7 @@ Parse_Result parse(Parser *p, String src, Token *tokens) {
 typedef struct {
   i32 indent;
   Resolver *res;
+  String enum_name;
 } Emitter;
 
 char *tcstring(String str) {
@@ -117,6 +118,8 @@ void emit_type_prefix(Emitter *e, Code_Type *type) {
       for (u32 i = 0; i < sb_count(str->members); i++) {
         emit_indent(e);
         String member = str->members[i];
+        builder_write(e->enum_name);
+        builder_write(const_string("_"));
         builder_write(member);
         builder_write(const_string(",\n"));
       }
@@ -178,6 +181,10 @@ void emit_type_postfix(Emitter *e, Code_Type *type) {
 
 void emit_expr(Emitter *e, Code_Expr *expr) {
   switch (expr->kind) {
+    case Expr_Kind_TYPE: {
+      emit_type_prefix(e, &expr->type_e);
+      emit_type_postfix(e, &expr->type_e);
+    } break;
     case Expr_Kind_NAME: {
       builder_write(expr->name.name);
     } break;
@@ -202,10 +209,12 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       // TODO(lvl5): remove unneccessary parens by dealing with precedence
       if (expr->binary.op == T_MEMBER) {
         emit_expr(e, expr->binary.left);
-        if (expr->binary.left->type->kind == Type_Kind_PTR) {
+        if (expr->binary.is_enum_member) {
+          builder_write(const_string("_"));
+        } else if (expr->binary.left->type->kind == Type_Kind_PTR) {
           builder_write(const_string("->"));
         } else {
-          builder_write(op);
+          builder_write(const_string("."));
         }
         emit_expr(e, expr->binary.right);
       } else {
@@ -329,13 +338,14 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt) {
 void emit_decl(Emitter *e, Code_Stmt_Decl *decl) {
   if (decl->type->kind == Type_Kind_ALIAS && 
       string_compare(decl->type->alias.name, const_string("Type"))) {
-    assert(decl->value->kind == Code_Kind_TYPE);
-    Code_Type *type = &decl->value->type;
+    //assert(decl->value->kind == Code_Kind_TYPE);
+    Code_Type *type = &decl->value->expr.type_e;
     
     if (decl->resolve_state == Resolve_State_UNRESOLVED &&
         e->res->need_state == Resolve_State_FULL) {
       builder_write(const_string("typedef "));
       
+      e->enum_name = decl->name;
       emit_type_prefix(e, type);
       builder_write(const_string(" "));
       
@@ -347,16 +357,17 @@ void emit_decl(Emitter *e, Code_Stmt_Decl *decl) {
         builder_write(decl->name);
       }
       emit_type_postfix(e, type);
+      e->enum_name = (String){0};
     } else if (decl->resolve_state == Resolve_State_UNRESOLVED &&
                e->res->need_state == Resolve_State_PARTIAL) {
-      assert(decl->value->type.kind == Type_Kind_STRUCT);
+      //assert(decl->value->type.kind == Type_Kind_STRUCT);
       builder_write(const_string("typedef struct "));
       builder_write(decl->name);
       builder_write(const_string(" "));
       builder_write(decl->name);
     } else if (decl->resolve_state == Resolve_State_PARTIAL &&
                e->res->need_state == Resolve_State_FULL) {
-      assert(decl->value->type.kind == Type_Kind_STRUCT);
+      //assert(decl->value->type.kind == Type_Kind_STRUCT);
       builder_write(const_string("struct "));
       builder_write(decl->name);
       builder_write(const_string(" "));
@@ -450,9 +461,11 @@ int main() {
   p->src = src;
   
   Scope *global_scope = alloc_scope(arena, null);
+  builtin_Type = (Code_Type *)code_type_alias(p, const_string("Type"));
   
 #define add_default_type(name) \
-  scope_add(global_scope, code_stmt_decl(p, const_string(name),(Code_Type *)code_type_alias(p, const_string("Type")),(Code_Node *)code_type_alias(p, const_string(name))));
+  scope_add(global_scope, code_stmt_decl(p, const_string(name), builtin_Type, (Code_Node *)code_type_alias(p, const_string(name))));
+  scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type));
   add_default_type("Type");
   add_default_type("void");
   add_default_type("u8");
@@ -469,6 +482,8 @@ int main() {
   add_default_type("b8");
   add_default_type("byte");
   add_default_type("char");
+  
+  builtin_i32 = get_builtin_type(global_scope, const_string("i32"));
   
   Parse_Result parse_result = parse(p, src, tokens);
   

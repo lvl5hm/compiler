@@ -18,11 +18,16 @@ struct Dep_Node {
   i32 dep_count;
 };
 
+Token ERROR_TOKEN = {0};
+
 Token parser_get(Parser *p, i32 offset) {
   Token result = {0};
   u32 index = p->i + offset;
-  assert(index < sb_count(p->tokens) && index >= 0);
-  result = p->tokens[index];
+  if (index < sb_count(p->tokens) && index >= 0) {
+    result = p->tokens[index];
+  } else {
+    result = ERROR_TOKEN;
+  }
   return result;
 }
 
@@ -168,9 +173,10 @@ Code_Stmt_Decl *parse_stmt_decl(Parser *p) {
   Code_Node *value = decl->value;
   if (value && 
       (value->kind == Code_Kind_FUNC ||
-       (value->kind == Code_Kind_TYPE &&
-        (value->type.kind == Type_Kind_STRUCT ||
-         value->type.kind == Type_Kind_ENUM)))) {
+       (value->kind == Code_Kind_EXPR &&
+        value->expr.kind == Expr_Kind_TYPE &&
+        (value->expr.type_e.kind == Type_Kind_STRUCT ||
+         value->expr.type_e.kind == Type_Kind_ENUM)))) {
     
   } else {
     parser_expect(p, T_SEMI);
@@ -235,6 +241,7 @@ Code_Stmt *parse_stmt(Parser *p) {
 
 Code_Expr *parse_expr_atom(Parser *p) {
   Code_Expr *result = 0;
+  
   if (parser_accept(p, T_LPAREN)) {
     Code_Expr *inner = parse_expr(p);
     parser_expect(p, T_RPAREN);
@@ -253,6 +260,8 @@ Code_Expr *parse_expr_atom(Parser *p) {
     value.data++;
     value.count -= 2;
     result = (Code_Expr *)code_expr_string(p, value);
+  } else {
+    result = (Code_Expr *)parse_type(p);
   }
   return result;
 }
@@ -260,37 +269,28 @@ Code_Expr *parse_expr_atom(Parser *p) {
 Code_Expr *parse_expr_call(Parser *p) {
   Code_Expr *result = 0;
   
-  i32 prev_pos = p->i;
-  Code_Type *cast_type = parse_type(p);
-  if (cast_type && parser_accept(p, T_LPAREN)) {
-    Code_Expr *expr = parse_expr(p);
-    parser_expect(p, T_RPAREN);
-    result = (Code_Expr *)code_expr_cast(p, cast_type, expr);
-  } else {
-    p->i = prev_pos;
-    result = parse_expr_atom(p);
-    while (true) {
-      if (parser_accept(p, T_DOT)) {
-        Code_Expr *right = parse_expr_atom(p);
-        result = (Code_Expr *)code_expr_binary(p, result, T_MEMBER, right);
-      } else if (parser_accept(p, T_LBRACKET)) {
-        Code_Expr *right = parse_expr(p);
-        parser_expect(p, T_RBRACKET);
-        result = (Code_Expr *)code_expr_binary(p, result, T_SUBSCRIPT, right);
-      } else if (parser_accept(p, T_LPAREN)) {
-        Code_Expr **args = sb_new(p->arena, Code_Expr *, 8);
-        while (!parser_accept(p, T_RPAREN)) {
-          Code_Expr *arg = parse_expr(p);
-          sb_push(args, arg);
-          if (!parser_accept(p, T_COMMA)) {
-            parser_expect(p, T_RPAREN);
-            break;
-          }
+  result = parse_expr_atom(p);
+  while (true) {
+    if (parser_accept(p, T_DOT)) {
+      Code_Expr *right = parse_expr_atom(p);
+      result = (Code_Expr *)code_expr_binary(p, result, T_MEMBER, right);
+    } else if (parser_accept(p, T_LBRACKET)) {
+      Code_Expr *right = parse_expr(p);
+      parser_expect(p, T_RBRACKET);
+      result = (Code_Expr *)code_expr_binary(p, result, T_SUBSCRIPT, right);
+    } else if (parser_accept(p, T_LPAREN)) {
+      Code_Expr **args = sb_new(p->arena, Code_Expr *, 8);
+      while (!parser_accept(p, T_RPAREN)) {
+        Code_Expr *arg = parse_expr(p);
+        sb_push(args, arg);
+        if (!parser_accept(p, T_COMMA)) {
+          parser_expect(p, T_RPAREN);
+          break;
         }
-        result = (Code_Expr *)code_expr_call(p, result, args);
-      } else {
-        break;
       }
+      result = (Code_Expr *)code_expr_call(p, result, args);
+    } else {
+      break;
     }
   }
   return result;
@@ -362,22 +362,6 @@ Code_Expr *parse_expr(Parser *p) {
   return result;
 }
 
-Code_Node *parse_expr_or_type(Parser *p) {
-  i32 prev_pos = p->i;
-  Code_Node *value = (Code_Node *)parse_type(p);
-  // NOTE(lvl5): foo := Bar or foo := >Bar
-  // can still be expressions even if here they are interpreted as 
-  // types
-  if (value && parser_peek(p, 0, T_LPAREN)) {
-    p->i = prev_pos;
-    value = (Code_Node *)parse_expr(p);
-  } else if (!value) {
-    p->i = prev_pos;
-    value = (Code_Node *)parse_expr(p);
-  }
-  return value;
-}
-
 Code_Stmt_Block *parse_stmt_block(Parser *p) {
   Code_Stmt_Block *result = 0;
   parser_expect(p, T_LCURLY);
@@ -416,7 +400,7 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
           value = (Code_Node *)sig;
         }
       } else {
-        value = parse_expr_or_type(p);
+        value = (Code_Node *)parse_expr(p);
       }
     }
     

@@ -1,5 +1,7 @@
 #include "parser.c"
 
+Code_Type *builtin_Type = 0;
+Code_Type *builtin_i32 = 0;
 
 typedef struct {
   Code_Stmt_Decl **top_decls;
@@ -175,8 +177,26 @@ void resolve_stmt_block(Resolver *res, Scope *scope, Code_Stmt_Block *block, b32
   }
 }
 
+Code_Type *get_builtin_type(Scope *scope, String name) {
+  Code_Type *result = (Code_Type *)scope_get(get_global_scope(scope), name)->decl->value;
+  return result;
+}
+
 void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
   switch (type->kind) {
+    case Type_Kind_ENUM: {
+      Scope *child_scope = alloc_scope(res->arena, scope);
+      type->enum_t.scope = child_scope;
+      for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
+        String member = type->enum_t.members[i];
+        scope_add(child_scope,
+                  code_stmt_decl(res->parser, member, builtin_i32,
+                                 (Code_Node *)code_expr_int(res->parser, i)
+                                 ));
+      }
+      type->enum_t.item_type = builtin_i32;
+    } break;
+    
     case Type_Kind_STRUCT: {
       Scope *child_scope = alloc_scope(res->arena, scope);
       type->struct_t.scope = child_scope;
@@ -184,10 +204,6 @@ void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
         Code_Stmt_Decl *member = type->struct_t.members[i];
         resolve_decl(res, child_scope, member);
       }
-    } break;
-    
-    case Type_Kind_ENUM: {
-      
     } break;
     
     case Type_Kind_PTR: {
@@ -221,13 +237,26 @@ void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
 void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
   // TODO(lvl5): set type type_info on the expression
   switch (expr->kind) {
+    case Expr_Kind_TYPE: {
+      resolve_type(res, scope, &expr->type_e);
+      expr->type = builtin_Type;
+    } break;
+    
     case Expr_Kind_UNARY: {
       // TODO(lvl5): make sure the operator makes sense
       resolve_expr(res, scope, expr->unary.val);
       
       if (expr->unary.op == T_REF) {
-        expr->type = (Code_Type *)code_type_pointer(res->parser, 
-                                                    expr->unary.val->type);
+        if (expr->unary.val->type == builtin_Type) {
+          Code_Type *base = &expr->unary.val->type_e;
+          expr->kind = Expr_Kind_TYPE;
+          expr->type_e.kind = Type_Kind_PTR;
+          expr->type_e.pointer.base = base;
+          expr->type = builtin_Type;
+        } else {
+          expr->type = (Code_Type *)code_type_pointer(res->parser, 
+                                                      expr->unary.val->type);
+        }
       } else if (expr->unary.op == T_DEREF) {
         expr->type = expr->unary.val->type->pointer.base;
       } else {
@@ -247,30 +276,54 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
         expr->type = left_type->array.item_type;
       } else if (expr->binary.op == T_MEMBER) {
         Code_Type *left_type = expr->binary.left->type;
-        // TODO(lvl5): left_type can be an alias for a struct
-        // or a pointer
+        
         if (left_type->kind == Type_Kind_PTR) {
           left_type = left_type->pointer.base;
         }
-        assert(left_type->kind == Type_Kind_ALIAS);
-        Code_Type_Struct *struct_t = &scope_get(scope, left_type->alias.name)->decl->value->type.struct_t;
-        Scope *struct_scope = struct_t->scope;
-        
-        assert(expr->binary.right->kind == Expr_Kind_NAME);
-        resolve_expr(res, struct_scope, expr->binary.right);
-        
         String member_name = expr->binary.right->name.name;
-        Code_Type *member_type = 0;
-        for (u32 i = 0; i < sb_count(struct_t->members); i++) {
-          Code_Stmt_Decl *member = struct_t->members[i];
-          if (string_compare(member->name, member_name)) {
-            member_type = member->type;
-            break;
+        
+        if (left_type != builtin_Type) {
+          assert(left_type->kind == Type_Kind_ALIAS);
+          assert(expr->binary.right->kind == Expr_Kind_NAME);
+          
+          Code_Type *left_base = &scope_get(scope, left_type->alias.name)->decl->value->expr.type_e;
+          if (left_base->kind == Type_Kind_STRUCT) {
+            Code_Type_Struct *struct_t = &left_base->struct_t;
+            Scope *struct_scope = struct_t->scope;
+            resolve_expr(res, struct_scope, expr->binary.right);
+            
+            Code_Type *member_type = 0;
+            for (u32 i = 0; i < sb_count(struct_t->members); i++) {
+              Code_Stmt_Decl *member = struct_t->members[i];
+              if (string_compare(member->name, member_name)) {
+                member_type = member->type;
+                break;
+              }
+            }
+            assert(member_type);
+            check_types(member_type, expr->binary.right->type);
+            expr->type = member_type;
           }
+        } else {
+          expr->binary.is_enum_member = true;
+          String enum_alias = expr->binary.left->type_e.alias.name;
+          Code_Type *left_base = &scope_get(scope, enum_alias)->decl->value->expr.type_e;
+          Code_Type_Enum *enum_t = &left_base->enum_t;
+          Scope *enum_scope = enum_t->scope;
+          resolve_expr(res, enum_scope, expr->binary.right);
+          
+          Code_Type *member_type = 0;
+          for (u32 i = 0; i < sb_count(enum_t->members); i++) {
+            String member = enum_t->members[i];
+            if (string_compare(member, member_name)) {
+              member_type = enum_t->item_type;
+              break;
+            }
+          }
+          assert(member_type);
+          check_types(member_type, expr->binary.right->type);
+          expr->type = (Code_Type *)code_type_alias(res->parser, enum_alias);
         }
-        assert(member_type);
-        check_types(member_type, expr->binary.right->type);
-        expr->type = member_type;
       } else {
         resolve_expr(res, scope, expr->binary.right);
         check_types(expr->binary.left->type, expr->binary.right->type);
@@ -285,31 +338,48 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
         String func_name = expr->call.func->name.name;
         resolve_name(res, scope, func_name, Resolve_State_PARTIAL);
         expr->call.func->type = scope_get(scope, func_name)->decl->type;
+        
+        if (expr->call.func->type == builtin_Type) {
+          String name = expr->call.func->name.name;
+          expr->call.func->kind = Expr_Kind_TYPE;
+          expr->call.func->type_e.kind = Type_Kind_ALIAS;
+          expr->call.func->type_e.alias.name = name;
+        }
       } else {
         resolve_expr(res, scope, expr->call.func);
+      }
+      
+      if (expr->call.func->type == builtin_Type) {
+        expr->kind = Expr_Kind_CAST;
+        Code_Type *cast_type = (Code_Type *)expr->call.func;
+        Code_Expr *cast_expr = expr->call.args[0];
+        expr->cast.cast_type = cast_type;
+        expr->cast.expr = cast_expr;
+        goto RESOLVE_CAST_LABEL;
       }
       
       for (u32 i = 0; i < sb_count(expr->call.args); i++) {
         Code_Expr *arg = expr->call.args[i];
         resolve_expr(res, scope, arg);
         
-        //Code_Stmt_Decl *param = expr->call.func->type->func.params[i];
-        //check_types(arg->type, param->type);
+        Code_Stmt_Decl *param = expr->call.func->type->func.params[i];
+        check_types(arg->type, param->type);
       }
       
       expr->type = expr->call.func->type->func.return_type;
     } break;
     case Expr_Kind_CAST: {
       resolve_type(res, scope, expr->cast.cast_type);
+      RESOLVE_CAST_LABEL:
       resolve_expr(res, scope, expr->cast.expr);
       
       expr->type = expr->cast.cast_type;
     } break;
     case Expr_Kind_INT: {
-      expr->type = &scope_get(scope, const_string("i32"))->decl->value->type;
+      expr->type = &scope_get(scope, const_string("i32"))->decl->value->expr.type_e;
     } break;
     case Expr_Kind_FLOAT: {
-      expr->type = &scope_get(scope, const_string("f32"))->decl->value->type;
+      expr->type = &scope_get(scope, const_string("f32"))->decl->value->expr.type_e;
     } break;
     case Expr_Kind_STRING: {
       resolve_name(res, scope, const_string("string"), Resolve_State_FULL);
@@ -320,6 +390,13 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
       resolve_name(res, scope, expr->name.name, Resolve_State_FULL);
       
       expr->type = scope_get(scope, expr->name.name)->decl->type;
+      if (expr->type == builtin_Type) {
+        String name = expr->name.name;
+        expr->kind = Expr_Kind_TYPE;
+        expr->type_e.kind = Type_Kind_ALIAS;
+        expr->type_e.alias.name = name;
+      }
+      assert(expr->type);
     } break;
     
     default: assert(false);
@@ -340,37 +417,6 @@ void resolve_func(Resolver *res, Scope *scope, Code_Func *func) {
   }
 }
 
-Code_Expr *check_if_actually_is_type(Resolver *res, Scope *scope, Code_Type *tested_type) {
-  b32 is_expr = true;
-  Code_Type *test = tested_type;
-  i32 ref_level = 0;
-  while (true) {
-    if (test->kind == Type_Kind_PTR) {
-      test = test->pointer.base;
-      ref_level++;
-      continue;
-    } else if (test->kind == Type_Kind_ALIAS) {
-      break;
-    } else {
-      is_expr = false;
-      return 0;
-      break;
-    }
-  }
-  resolve_name(res, scope, test->alias.name, Resolve_State_FULL);
-  Code_Stmt_Decl *alias_decl = scope_get(scope, test->alias.name)->decl;
-  if (alias_decl->type->kind != Type_Kind_ALIAS ||
-      !string_compare(alias_decl->type->alias.name, const_string("Type"))) {
-    Code_Expr *result = (Code_Expr *)code_expr_name(res->parser, test->alias.name);
-    while (ref_level--) {
-      result = (Code_Expr *)code_expr_unary(res->parser, T_REF, result);
-    }
-    return result;
-  }
-  
-  return 0;
-}
-
 void resolve_decl(Resolver *res, Scope *scope, Code_Stmt_Decl *decl) {
   if (decl->resolve_state >= res->need_state) {
     return;
@@ -382,43 +428,13 @@ void resolve_decl(Resolver *res, Scope *scope, Code_Stmt_Decl *decl) {
   
   if (decl->value) {
     switch (decl->value->kind) {
-      case Code_Kind_TYPE: {
-        Code_Expr *expr = check_if_actually_is_type(res, scope, &decl->value->type);
-        
-        if (expr) {
-          *(Code_Node *)decl->value = *(Code_Node *)expr;
-          goto RESOLVE_EXPR_LABEL;
-        }
-        
-        
-        if (need_resolve(res, Resolve_State_PARTIAL)) {
-          assert(decl->value->type.kind == Type_Kind_STRUCT);
-        } else {
-          resolve_type(res, scope, &decl->value->type);
-        }
-        
-        Code_Type *type = scope_get(scope, const_string("Type"))->decl->type;
-        if (decl->type) {
-          check_types(decl->type, type);
-        } else {
-          decl->type = type;
-        }
-      } break;
-      
       case Code_Kind_EXPR: {
-        RESOLVE_EXPR_LABEL:
-        if (decl->value->expr.kind == Expr_Kind_CAST) {
-          Code_Expr *expr = check_if_actually_is_type(res, scope, decl->value->expr.cast_or_call.cast_type);
-          
-          if (expr) {
-            Code_Expr **args = sb_new(res->arena, Code_Expr *, 1);
-            sb_push(args, decl->value->expr.cast_or_call.expr);
-            decl->value->expr = *(Code_Expr *)code_expr_call(res->parser, expr, args);
-          }
+        if (need_resolve(res, Resolve_State_PARTIAL)) {
+          assert(decl->value->expr.kind == Expr_Kind_TYPE &&
+                 decl->value->expr.type_e.kind == Type_Kind_STRUCT);
+        } else {
+          resolve_expr(res, scope, &decl->value->expr);
         }
-        
-        
-        resolve_expr(res, scope, &decl->value->expr);
         if (decl->type) {
           check_types(decl->type, decl->value->expr.type);
         } else {
