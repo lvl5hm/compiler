@@ -22,8 +22,10 @@ typedef struct {
   Code_Stmt_Decl *decl;
   Parser *parser;
   Code_Func *current_func;
+  Code_Stmt_Block *current_block;
   
   b32 is_inside_func_typedef;
+  Code_Expr *context_arg;
 } Resolver;
 
 
@@ -75,6 +77,7 @@ Scope *get_global_scope(Scope *child) {
 }
 
 
+// TODO(lvl5): right now this rejects foo : Allocator = arena_allocator;
 b32 check_types(Code_Type *a, Code_Type *b) {
   b32 result = false;
   
@@ -117,7 +120,7 @@ b32 check_types(Code_Type *a, Code_Type *b) {
     }
   }
   
-  assert(result);
+  //assert(result);
   return result;
 }
 
@@ -129,6 +132,15 @@ void resolve_expr(Resolver, Scope *, Code_Expr *);
 void resolve_stmt(Resolver, Scope *, Code_Stmt *);
 void resolve_stmt_block(Resolver, Scope *, Code_Stmt_Block *, b32);
 
+
+Code_Type *get_final_type(Scope *scope, Code_Type *type) {
+  Code_Type *result = type;
+  while (result->kind == Type_Kind_ALIAS) {
+    // TODO(lvl5): there can be problems with scopes and type alias shadowing
+    result = &scope_get(scope, result->alias.name)->decl->value->expr.type_e;
+  }
+  return result;
+}
 
 void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
   switch (stmt->kind) {
@@ -169,9 +181,63 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
     } break;
     case Stmt_Kind_KEYWORD: {
       // TODO(lvl5): make sure the keyword makes sense?
-      resolve_expr(res, scope, stmt->keyword.expr);
-      if (stmt->keyword.keyword == T_RETURN) {
-        check_types(stmt->keyword.expr->type, res.current_func->type->return_type);
+      switch (stmt->keyword.keyword) {
+        case T_RETURN: {
+          assert(stmt->keyword.stmt->kind == Stmt_Kind_EXPR);
+          resolve_expr(res, scope, stmt->keyword.stmt->expr.expr);
+          check_types(stmt->keyword.stmt->expr.expr->type, res.current_func->type->return_type);
+          
+          if (res.current_block &&
+              res.current_block->deferred_statements) {
+            u32 deferred_count = sb_count(res.current_block->deferred_statements);
+            u32 all_count = sb_count(res.current_block->statements);
+            if (deferred_count) {
+              for (u32 i = 0; i < deferred_count; i++) 
+                sb_push(res.current_block->statements, null);
+              
+              // TODO(lvl5): if foo return
+              // needs to add a block around return
+              // should all ifs have an implicit block?
+              
+              // if you return inside of a block, it should gather all defers of the parent function still
+              
+              // should it only gather defers that were declared before the return?
+              
+              b32 self_index = -1;
+              for (u32 i = 0; i < all_count; i++) {
+                Code_Stmt *item = res.current_block->statements[i];
+                if (item == stmt) {
+                  self_index = i;
+                }
+                if (self_index != -1) {
+                  res.current_block->statements[i+deferred_count] = item;
+                }
+              }
+              for (u32 i = 0; i < deferred_count; i++) {
+                res.current_block->statements[self_index+i] = res.current_block->deferred_statements[deferred_count-i-1];
+              }
+            }
+          }
+        } break;
+        
+        case T_PUSH_CONTEXT: {
+          resolve_expr(res, scope, stmt->keyword.extra);
+          Resolver child_res = res;
+          child_res.context_arg = stmt->keyword.extra;
+          resolve_stmt(child_res, scope, stmt->keyword.stmt);
+        } break;
+        
+        case T_DEFER: {
+          // TODO(lvl5): defers should be in reverse order
+          // TODO(lvl5): defers should execute before every return
+          resolve_stmt(res, scope, stmt->keyword.stmt);
+          if (!res.current_block->deferred_statements) {
+            res.current_block->deferred_statements = sb_new(res.arena, Code_Stmt *, 4);
+          }
+          sb_push(res.current_block->deferred_statements, stmt->keyword.stmt);
+        } break;
+        
+        default: assert(false);
       }
     } break;
     
@@ -184,9 +250,13 @@ void resolve_stmt_block(Resolver res, Scope *scope, Code_Stmt_Block *block, b32 
   if (!is_func_body) {
     child_scope = alloc_scope(res.arena, scope);
   }
-  for (u32 i = 0; i < sb_count(block->statements); i++) {
+  Resolver child_res = res;
+  child_res.current_block = block;
+  // TODO(lvl5): currently we are inserting new statements inside the loop
+  u32 count = sb_count(block->statements);
+  for (u32 i = 0; i < count; i++) {
     Code_Stmt *stmt = block->statements[i];
-    resolve_stmt(res, scope, stmt);
+    resolve_stmt(child_res, scope, stmt);
   }
 }
 
@@ -415,9 +485,10 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
         goto RESOLVE_CAST_LABEL;
       }
       
-      Code_Stmt_Decl **params = expr->call.func->type->func.params;
+      Code_Type_Func *sig = &get_final_type(scope, expr->call.func->type)->func;
+      Code_Stmt_Decl **params = sig->params;
       Code_Expr **args = expr->call.args;
-      sb_push(args, (Code_Expr *)code_expr_name(res.parser, const_string("ctx")));
+      sb_push(args, res.context_arg);
       
       assert(sb_count(args) == sb_count(params));
       for (u32 i = 0; i < sb_count(params); i++) {
@@ -428,7 +499,7 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
         check_types(arg->type, param->type);
       }
       
-      expr->type = expr->call.func->type->func.return_type;
+      expr->type = sig->return_type;
     } break;
     case Expr_Kind_CAST: {
       resolve_type(res, scope, expr->cast.cast_type);
@@ -536,6 +607,7 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
           Resolver child_res = res;
           res.current_func = &decl->value->func;
           Scope *child_scope = res.current_func->scope;
+          res.context_arg = (Code_Expr *)code_expr_name(res.parser, const_string("ctx"));
           resolve_stmt_block(res, child_scope, res.current_func->body, /* is_func_body */ true);
         } break;
         

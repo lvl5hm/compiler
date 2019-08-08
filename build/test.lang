@@ -1,3 +1,10 @@
+Alloc_Op :: enum {
+  ALLOC;
+  REALLOC;
+  FREE;
+  FREE_ALL;
+}
+
 Allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte;
 
 Arena :: struct {
@@ -19,15 +26,44 @@ Context :: struct {
   scratch:        Arena;
 }
 
-arena_alloc :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+  //TODO: alignment
   arena :: (*Arena)(allocator_data);
   if op == Alloc_Op.ALLOC {
-    result := arena.data + arena.size; // TODO pointer arithmetic, right now this is wrong
+    result := arena.data + arena.size;
     arena.size += size;
     return result;
   } else if op == Alloc_Op.FREE_ALL {
     arena.size = u64(0);
+  } else if op == Alloc_Op.REALLOC {
+    result := alloc(size);
+    memory_copy((*void)(result), (*void)(old_ptr), old_size);
   }
+}
+
+memory_copy :: func(dst: *void, src: *void, size: u64) void {
+  for i := u64(0); i < size; i += u64(1) {
+    <(dst + i) = <(src + i);
+  }
+}
+
+alloc :: func(size: u64) *byte {
+  result := ctx.allocator(size, Alloc_Op.ALLOC, ctx.allocator_data, (*byte)(0), u64(0), u64(4));
+  return result;
+}
+
+scratch_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+  result := arena_allocator(size, op, (*void)(*ctx.scratch), (*byte)(0), u64(0), u64(4));
+  return result;
+}
+
+scratch_alloc :: func(size: u64) *byte {
+  result := scratch_allocator(size, Alloc_Op.ALLOC, (*void)(0), (*byte)(0), u64(0), u64(4));
+  return result;
+}
+
+scratch_reset :: func() void {
+  scratch_allocator(size, Alloc_Op.FREE_ALL, (*void)(0), (*byte)(0), u64(0), u64(4));
 }
 
 test :: func(a: i32) i32 {
@@ -35,31 +71,40 @@ test :: func(a: i32) i32 {
 }
 
 main :: func() i32 {
-  fjdksl := "blabla";
+  test_string := "blabla";
+  defer {
+    test_string.count -= 4;
+  }
+  defer scratch_reset();
+
+  if 4 > 6 {
+    return 11;
+  }
+
   aa := test(43);
+
+  scr := ctx;
+  scr.allocator = scratch_allocator;
+  push_context scr {
+    test(11);
+  }
+
+  return 43;
 }
 
-__string_make :: func(data: *char, count: u64) string {
+__string_make :: func(data: *byte, count: u64) string {
   result: string;
-  result.data = data;
+  result.data = alloc(count);
+  memory_copy((*void)(result.data), (*void)(data), count);
   result.count = count;
   return result;
 }
 
 
 string :: struct {
-  data:  *char;
+  data:  *byte;
   count: u64;
 }
-
-
-Alloc_Op :: enum {
-  ALLOC;
-  REALLOC;
-  FREE;
-  FREE_ALL;
-}
-
 
 __Array_Dynamic :: struct {
   data:           *void;

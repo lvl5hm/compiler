@@ -186,16 +186,16 @@ Code_Stmt_Decl *parse_stmt_decl(Parser *p) {
   return decl;
 }
 
-Code_Stmt *parse_stmt(Parser *p) {
+Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
   Code_Stmt *result = 0;
   if (parser_peek(p, 0, T_NAME) && parser_peek(p, 1, T_COLON)) {
     result = (Code_Stmt *)parse_stmt_decl(p);
   } else if (parser_accept(p, T_IF)) {
     Code_Expr *cond = parse_expr(p);
-    Code_Stmt *then_branch = parse_stmt(p);
+    Code_Stmt *then_branch = parse_stmt(p, true);
     Code_Stmt *else_branch = 0;
     if (parser_accept(p, T_ELSE)) {
-      else_branch = parse_stmt(p);
+      else_branch = parse_stmt(p, true);
     }
     result = (Code_Stmt *)code_stmt_if(p, cond, then_branch, else_branch);
   } else if (parser_accept(p, T_FOR)) {
@@ -203,22 +203,27 @@ Code_Stmt *parse_stmt(Parser *p) {
     parser_expect(p, T_SEMI);
     Code_Expr *cond = parse_expr(p);
     parser_expect(p, T_SEMI);
-    Code_Stmt *post = parse_stmt(p);
-    Code_Stmt *body = parse_stmt(p);
+    Code_Stmt *post = parse_stmt(p, false);
+    Code_Stmt *body = parse_stmt(p, true);
     
     result = (Code_Stmt *)code_stmt_for(p, init, cond, post, body);
   } else if (parser_peek(p, 0, T_RETURN) ||
              parser_peek(p, 0, T_BREAK) ||
-             parser_peek(p, 0, T_CONTINUE)) {
+             parser_peek(p, 0, T_CONTINUE) ||
+             parser_peek(p, 0, T_DEFER)) {
     Token_Kind keyword = parser_get(p, 0).kind;
     parser_expect(p, keyword);
     
-    Code_Expr *expr = 0;
+    Code_Stmt *stmt = 0;
     if (!parser_peek(p, 0, T_SEMI)) {
-      expr = parse_expr(p);
+      stmt = parse_stmt(p, true);
     }
-    parser_expect(p, T_SEMI);
-    result = (Code_Stmt *)code_stmt_keyword(p, keyword, expr);
+    result = (Code_Stmt *)code_stmt_keyword(p, keyword, stmt, null);
+  } else if (parser_peek(p, 0, T_PUSH_CONTEXT)) {
+    parser_expect(p, T_PUSH_CONTEXT);
+    Code_Expr *extra = parse_expr(p);
+    Code_Stmt *stmt = parse_stmt(p, true);
+    result = (Code_Stmt *)code_stmt_keyword(p, T_PUSH_CONTEXT, stmt, extra);
   } else if (parser_peek(p, 0, T_LCURLY)) {
     result = (Code_Stmt *)parse_stmt_block(p);
   } else {
@@ -229,7 +234,9 @@ Code_Stmt *parse_stmt(Parser *p) {
       Token_Kind op = parser_get(p, 0).kind;
       parser_expect(p, op);
       Code_Expr *right = parse_expr(p);
-      parser_expect(p, T_SEMI);
+      if (expect_semi) {
+        parser_expect(p, T_SEMI);
+      }
       result = (Code_Stmt *)code_stmt_assign(p, left, op, right);
     } else {
       syntax_error("Expected an assignment statement or an expression.\n");
@@ -367,7 +374,7 @@ Code_Stmt_Block *parse_stmt_block(Parser *p) {
   parser_expect(p, T_LCURLY);
   Code_Stmt **statements = sb_new(p->arena, Code_Stmt *, 32);
   while (!parser_accept(p, T_RCURLY)) {
-    Code_Stmt *st = parse_stmt(p);
+    Code_Stmt *st = parse_stmt(p, true);
     sb_push(statements, st);
   }
   result = code_stmt_block(p, statements);

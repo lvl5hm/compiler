@@ -83,8 +83,11 @@ typedef enum {
   T_ELSE,
   T_CONTINUE,
   T_FOR,
+  T_PUSH_CONTEXT,
+  T_DEFER,
   T_IF,
   T_KEYWORD_LAST = T_IF,
+  
   
   T_SUBSCRIPT = T_LBRACKET,
   T_DEREF = T_LESS,
@@ -101,6 +104,8 @@ String Token_Kind_To_String[] = {
   [T_IF] = arr_string("if"),
   [T_FOR] = arr_string("for"),
   [T_CONTINUE] = arr_string("continue"),
+  [T_PUSH_CONTEXT] = arr_string("push_context"),
+  [T_DEFER] = arr_string("defer"),
   
   [T_NONE] = arr_string("NONE"),
   [T_ERROR] = arr_string("ERROR"),

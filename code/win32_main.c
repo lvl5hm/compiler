@@ -2,14 +2,12 @@
 
 /*
 TODO:
-[ ] inside a function typedef you don't need to resolve full deps
+[ ] defer
 [ ] functions should be emitted as pointers except for constant declarations
-[ ] deal with alias to alias to struct (or enum i guess)
 [ ] sizeof
 [ ] error reporting
 [ ] compile an actual executable
 
-[ ] implicit context
 [ ] fixed length arrays
 [ ] dynamic arrays
 [ ] array views
@@ -36,6 +34,7 @@ TODO:
 [ ] using
 [ ] polymorphic functions????
 [ ] compile time execution?????????????????
+[ ] preserve comments
 */
 
 typedef struct {
@@ -266,14 +265,14 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
   }
 }
 
-void emit_stmt(Emitter *, Code_Stmt *);
+void emit_stmt(Emitter *, Code_Stmt *, b32);
 
 void emit_stmt_block(Emitter *e, Code_Stmt_Block *block) {
   builder_write(const_string("{\n"));
   e->indent++;
   for (u32 i = 0; i < sb_count(block->statements); i++) {
     emit_indent(e);
-    emit_stmt(e, block->statements[i]);
+    emit_stmt(e, block->statements[i], true);
     builder_write(const_string("\n"));
   }
   e->indent--;
@@ -282,7 +281,7 @@ void emit_stmt_block(Emitter *e, Code_Stmt_Block *block) {
   builder_write(const_string("}"));
 }
 
-void emit_stmt(Emitter *e, Code_Stmt *stmt) {
+void emit_stmt(Emitter *e, Code_Stmt *stmt, b32 semi) {
   switch (stmt->kind) {
     case Stmt_Kind_ASSIGN: {
       String op_string = Token_Kind_To_String[stmt->assign.op];
@@ -291,20 +290,25 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt) {
       builder_write(op_string);
       builder_write(const_string(" "));
       emit_expr(e, stmt->assign.right);
-      builder_write(const_string(";"));
+      
+      if (semi) {
+        builder_write(const_string(";"));
+      }
     } break;
     case Stmt_Kind_EXPR: {
       emit_expr(e, stmt->expr.expr);
-      builder_write(const_string(";"));
+      if (semi) {
+        builder_write(const_string(";"));
+      }
     } break;
     case Stmt_Kind_IF: {
       builder_write(const_string("if ("));
       emit_expr(e, stmt->if_s.cond);
       builder_write(const_string(") "));
-      emit_stmt(e, stmt->if_s.then_branch);
+      emit_stmt(e, stmt->if_s.then_branch, true);
       if (stmt->if_s.else_branch) {
         builder_write(const_string(" else "));
-        emit_stmt(e, stmt->if_s.else_branch);
+        emit_stmt(e, stmt->if_s.else_branch, true);
       }
     } break;
     case Stmt_Kind_BLOCK: {
@@ -317,19 +321,32 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt) {
       builder_write(const_string("; "));
       emit_expr(e, stmt->for_s.cond);
       builder_write(const_string("; "));
-      emit_stmt(e, stmt->for_s.post);
+      emit_stmt(e, stmt->for_s.post, /*semi*/ false);
       builder_write(const_string(") "));
-      emit_stmt(e, stmt->for_s.body);
+      emit_stmt(e, stmt->for_s.body, true);
     } break;
     case Stmt_Kind_KEYWORD: {
-      builder_write(Token_Kind_To_String[stmt->keyword.keyword]);
-      builder_write(const_string(" "));
-      emit_expr(e, stmt->keyword.expr);
-      builder_write(const_string(";"));
+      switch (stmt->keyword.keyword) {
+        case T_RETURN: {
+          builder_write(Token_Kind_To_String[stmt->keyword.keyword]);
+          builder_write(const_string(" "));
+          emit_stmt(e, stmt->keyword.stmt, true);
+        } break;
+        
+        case T_PUSH_CONTEXT: {
+          emit_stmt(e, stmt->keyword.stmt, true);
+        } break;
+        
+        case T_DEFER: break;
+        
+        default: assert(false);
+      }
     } break;
     case Stmt_Kind_DECL: {
       emit_decl(e, &stmt->decl, Resolve_State_FULL);
-      builder_write(const_string(";"));
+      if (semi) {
+        builder_write(const_string(";"));
+      }
     } break;
     default: assert(false);
   }

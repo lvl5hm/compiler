@@ -180,12 +180,14 @@ typedef struct {
 
 typedef struct {
   Token_Kind keyword;
-  Code_Expr *expr;
+  Code_Stmt *stmt;
+  Code_Expr *extra;
 } Code_Stmt_Keyword;
 
 struct Code_Stmt_Block {
   Code_Stmt **statements;
   Scope *scope;
+  Code_Stmt **deferred_statements;
 };
 
 typedef enum {
@@ -434,11 +436,12 @@ Code_Stmt_For *code_stmt_for(Parser *p, Code_Stmt_Decl *init, Code_Expr *cond, C
   return (Code_Stmt_For *)node;
 }
 
-Code_Stmt_Keyword *code_stmt_keyword(Parser *p, Token_Kind keyword, Code_Expr *expr) {
+Code_Stmt_Keyword *code_stmt_keyword(Parser *p, Token_Kind keyword, Code_Stmt *stmt, Code_Expr *extra) {
   Code_Node *node = code_node(p, Code_Kind_STMT);
   node->stmt.kind = Stmt_Kind_KEYWORD;
   node->stmt.keyword.keyword = keyword;
-  node->stmt.keyword.expr = expr;
+  node->stmt.keyword.stmt = stmt;
+  node->stmt.keyword.extra = extra;
   return (Code_Stmt_Keyword *)node;
 }
 
