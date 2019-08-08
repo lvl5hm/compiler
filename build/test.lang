@@ -1,30 +1,28 @@
-Allocator := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte;
+Allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte;
 
-Arena := struct {
+Arena :: struct {
   data:     *byte;
   capacity: u64;
   size:     u64;
 }
 
-arena_make := func(data: *byte, capacity: u64) Arena {
+arena_make :: func(data: *byte, capacity: u64) Arena {
   result: Arena;
   result.data = data;
   result.capacity = capacity;
   return result;
-
-  //foo("fdsf", struct {a: i32}, 5435)
 }
 
-Context := struct {
+Context :: struct {
   allocator:      Allocator;
   allocator_data: *void;
   scratch:        Arena;
 }
 
-arena_alloc := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
-  arena := (*Arena)(allocator_data);
+arena_alloc :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+  arena :: (*Arena)(allocator_data);
   if op == Alloc_Op.ALLOC {
-    result := arena.data; // TODO pointer arithmetic, right now this is wrong
+    result := arena.data + arena.size; // TODO pointer arithmetic, right now this is wrong
     arena.size += size;
     return result;
   } else if op == Alloc_Op.FREE_ALL {
@@ -32,11 +30,16 @@ arena_alloc := func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *by
   }
 }
 
-main := func() i32 {
-  test := "blabla";
+test :: func(a: i32) i32 {
+  return a*2;
 }
 
-__string_make := func(data: *char, count: u64) string {
+main :: func() i32 {
+  fjdksl := "blabla";
+  aa := test(43);
+}
+
+__string_make :: func(data: *char, count: u64) string {
   result: string;
   result.data = data;
   result.count = count;
@@ -44,13 +47,13 @@ __string_make := func(data: *char, count: u64) string {
 }
 
 
-string := struct {
+string :: struct {
   data:  *char;
   count: u64;
 }
 
 
-Alloc_Op := enum {
+Alloc_Op :: enum {
   ALLOC;
   REALLOC;
   FREE;
@@ -58,7 +61,7 @@ Alloc_Op := enum {
 }
 
 
-__Array_Dynamic := struct {
+__Array_Dynamic :: struct {
   data:           *void;
   count:          i32;
   capacity:       i32;

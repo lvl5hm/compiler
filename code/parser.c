@@ -386,11 +386,19 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
     Code_Type *type = 0;
     Code_Node *value = 0;
     
-    if (!parser_peek(p, 0, T_ASSIGN)) {
+    if (!parser_peek(p, 0, T_ASSIGN) &&
+        !parser_peek(p, 0, T_COLON)) {
       type = parse_type(p);
     }
     
-    if (parser_accept(p, T_ASSIGN)) {
+    b32 is_const = false;
+    if (parser_accept(p, T_ASSIGN) ||
+        parser_accept(p, T_COLON)) {
+      Token_Kind prev = parser_prev(p).kind;
+      if (prev == T_COLON) {
+        is_const = true;
+      }
+      
       if (parser_peek(p, 0, T_FUNC)) {
         Code_Type_Func *sig = parse_type_func(p);
         if (parser_peek(p, 0, T_LCURLY)) {
@@ -404,7 +412,7 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
       }
     }
     
-    result = code_stmt_decl(p, name, type, value);
+    result = code_stmt_decl(p, name, type, value, is_const);
   }
   
   return result;

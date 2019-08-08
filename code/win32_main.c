@@ -2,25 +2,41 @@
 
 /*
 TODO:
-[ ] lvalues, rvalues, assignment, referencing and dereferencing
-[ ] think about cast syntax, probably should be something like cast(val, type)
+[ ] inside a function typedef you don't need to resolve full deps
 [ ] functions should be emitted as pointers except for constant declarations
-[ ] constant declarations
+[ ] deal with alias to alias to struct (or enum i guess)
 [ ] sizeof
-[ ] fixed length arrays
-[ ] casts
-[ ] partial resolve and emit cleanup
+[ ] error reporting
+[ ] compile an actual executable
+
 [ ] implicit context
+[ ] fixed length arrays
 [ ] dynamic arrays
 [ ] array views
-[ ] enums
+
+[ ] decide what casts are allowed
+[ ] lvalues, rvalues, assignment, referencing and dereferencing
+[ ] if else block formatting
+[ ] better for loop
+[ ] typedefs and functions inside functions
+-iterate arrays
+-iterate enums
+[ ] while loop
+[ ] enum to string, enum count
+[ ] static struct members (enum names are essentially static members already)
 [ ] initializers for structs
 [ ] default parameters for funcs
+[ ] allow omitting names in functions without bodies/typedefs??
+[ ] some kind of short syntax for functions when type already has an alias (what do you do with typedefs that omit param names?)
+
+[ ] runtime Type_Info
+[ ] varargs (Any type??)
+[ ] implicit conversions
+[ ] modules
+[ ] using
+[ ] polymorphic functions????
+[ ] compile time execution?????????????????
 */
-
-Arena _scratch_arena;
-Arena *scratch_arena = &_scratch_arena;
-
 
 typedef struct {
   Code_Stmt_Decl **decls;
@@ -33,21 +49,6 @@ Parse_Result parse(Parser *p, String src, Token *tokens) {
   assert(p->error_count == 0);
   
   return result;
-}
-
-typedef struct {
-  i32 indent;
-  Resolver *res;
-  String enum_name;
-} Emitter;
-
-char *tcstring(String str) {
-  char *result = to_c_string(scratch_arena, str);
-  return result;
-}
-
-void builder_write(String str) {
-  printf(tcstring(str));
 }
 
 
@@ -258,14 +259,13 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       builder_write(expr->string.value);
       builder_write(const_string("\", "));
       builder_write(i64_to_string(scratch_arena, expr->string.value.count));
-      builder_write(const_string(")"));
+      builder_write(const_string(", ctx)"));
     } break;
     
     default: assert(false);
   }
 }
 
-void emit_decl(Emitter *, Code_Stmt_Decl *);
 void emit_stmt(Emitter *, Code_Stmt *);
 
 void emit_stmt_block(Emitter *e, Code_Stmt_Block *block) {
@@ -279,7 +279,7 @@ void emit_stmt_block(Emitter *e, Code_Stmt_Block *block) {
   e->indent--;
   
   emit_indent(e);
-  builder_write(const_string("}\n"));
+  builder_write(const_string("}"));
 }
 
 void emit_stmt(Emitter *e, Code_Stmt *stmt) {
@@ -312,7 +312,8 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt) {
     } break;
     case Stmt_Kind_FOR: {
       builder_write(const_string("for ("));
-      emit_decl(e, stmt->for_s.init);
+      // TODO(lvl5): only top level decls should have Resolve_State
+      emit_decl(e, stmt->for_s.init, Resolve_State_FULL);
       builder_write(const_string("; "));
       emit_expr(e, stmt->for_s.cond);
       builder_write(const_string("; "));
@@ -327,52 +328,32 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt) {
       builder_write(const_string(";"));
     } break;
     case Stmt_Kind_DECL: {
-      emit_decl(e, &stmt->decl);
+      emit_decl(e, &stmt->decl, Resolve_State_FULL);
       builder_write(const_string(";"));
     } break;
     default: assert(false);
   }
 }
 
-
-void emit_decl(Emitter *e, Code_Stmt_Decl *decl) {
-  if (decl->type->kind == Type_Kind_ALIAS && 
-      string_compare(decl->type->alias.name, const_string("Type"))) {
-    //assert(decl->value->kind == Code_Kind_TYPE);
+void emit_decl_full(Emitter *e, Code_Stmt_Decl *decl) {
+  if (decl->type == builtin_Type) {
     Code_Type *type = &decl->value->expr.type_e;
     
-    if (decl->resolve_state == Resolve_State_UNRESOLVED &&
-        e->res->need_state == Resolve_State_FULL) {
-      builder_write(const_string("typedef "));
-      
-      e->enum_name = decl->name;
-      emit_type_prefix(e, type);
-      builder_write(const_string(" "));
-      
-      if (type->kind == Type_Kind_FUNC) {
-        builder_write(const_string("(*"));
-        builder_write(decl->name);
-        builder_write(const_string(")"));
-      } else {
-        builder_write(decl->name);
-      }
-      emit_type_postfix(e, type);
-      e->enum_name = (String){0};
-    } else if (decl->resolve_state == Resolve_State_UNRESOLVED &&
-               e->res->need_state == Resolve_State_PARTIAL) {
-      //assert(decl->value->type.kind == Type_Kind_STRUCT);
-      builder_write(const_string("typedef struct "));
+    builder_write(const_string("typedef "));
+    
+    e->enum_name = decl->name;
+    emit_type_prefix(e, type);
+    builder_write(const_string(" "));
+    
+    if (type->kind == Type_Kind_FUNC) {
+      builder_write(const_string("(*"));
       builder_write(decl->name);
-      builder_write(const_string(" "));
+      builder_write(const_string(")"));
+    } else {
       builder_write(decl->name);
-    } else if (decl->resolve_state == Resolve_State_PARTIAL &&
-               e->res->need_state == Resolve_State_FULL) {
-      //assert(decl->value->type.kind == Type_Kind_STRUCT);
-      builder_write(const_string("struct "));
-      builder_write(decl->name);
-      builder_write(const_string(" "));
-      emit_struct_body(e, &type->struct_t);
     }
+    emit_type_postfix(e, type);
+    e->enum_name = (String){0};
   } else {
     emit_type_prefix(e, decl->type);
     builder_write(const_string(" "));
@@ -383,43 +364,55 @@ void emit_decl(Emitter *e, Code_Stmt_Decl *decl) {
       if (decl->value->kind == Code_Kind_EXPR) {
         builder_write(const_string(" = "));
         emit_expr(e, (Code_Expr *)decl->value);
-      } else if (decl->value->kind == Code_Kind_FUNC &&
-                 need_resolve(e->res, Resolve_State_FULL)) {
+      } else if (decl->value->kind == Code_Kind_FUNC) {
         builder_write(const_string(" "));
         emit_stmt_block(e, decl->value->func.body);
-      } else {
-        builder_write(const_string(";\n"));
       }
     }
   }
 }
 
-void resolve_and_emit_decl(Resolver *res, Scope *scope, Code_Stmt_Decl *decl) {
-  if (decl->resolve_state >= res->need_state) {
-    return;
-  }
-  
-  resolve_decl(res, scope, decl);
-  Emitter emitter = {0};
-  emitter.indent = 0;
-  emitter.res = res;
-  emit_decl(&emitter, decl);
-  decl->resolve_state = res->need_state;
-  
-  if (decl->value && decl->type->kind == Type_Kind_FUNC) {
-    builder_write(const_string("\n"));
-  } else {
-    builder_write(const_string(";\n\n"));
+void emit_decl(Emitter *e, Code_Stmt_Decl *decl, Resolve_State need_state) {
+  switch (need_state) {
+    case Resolve_State_PARTIAL: {
+      if (decl->value->kind == Code_Kind_FUNC) {
+        builder_write(const_string(";\n"));
+      } else if (decl->type == builtin_Type &&
+                 decl->value->expr.type_e.kind == Type_Kind_STRUCT) {
+        builder_write(const_string("typedef struct "));
+        builder_write(decl->name);
+        builder_write(const_string(" "));
+        builder_write(decl->name);
+        decl->emit_state = Resolve_State_PARTIAL;
+      } else {
+        emit_decl_full(e, decl);
+        decl->emit_state = Resolve_State_FULL;
+      }
+    } break;
+    
+    case Resolve_State_FULL: {
+      if (decl->emit_state == Resolve_State_PARTIAL &&
+          decl->type == builtin_Type &&
+          decl->value->expr.type_e.kind == Type_Kind_STRUCT) {
+        builder_write(const_string("struct "));
+        builder_write(decl->name);
+        builder_write(const_string(" "));
+        
+        Code_Type *type = &decl->value->expr.type_e;
+        emit_struct_body(e, &type->struct_t);
+      } else {
+        emit_decl_full(e, decl);
+      }
+      decl->emit_state = Resolve_State_FULL;
+    } break;
   }
 }
 
-
-void resolve_decls(Resolver *res, Parse_Result parsed, Scope *global_scope) {
+void resolve_decls(Resolver res, Parse_Result parsed, Scope *global_scope) {
   for (u32 decl_index = 0; decl_index < sb_count(parsed.decls); decl_index++) {
     Code_Stmt_Decl *decl = parsed.decls[decl_index];
-    res->decl = decl;
-    res->need_state = Resolve_State_FULL;
-    resolve_and_emit_decl(res, global_scope, decl);
+    res.decl = decl;
+    resolve_and_emit_decl(res, global_scope, decl, Resolve_State_FULL);
   }
 }
 
@@ -464,8 +457,8 @@ int main() {
   builtin_Type = (Code_Type *)code_type_alias(p, const_string("Type"));
   
 #define add_default_type(name) \
-  scope_add(global_scope, code_stmt_decl(p, const_string(name), builtin_Type, (Code_Node *)code_type_alias(p, const_string(name))));
-  scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type));
+  scope_add(global_scope, code_stmt_decl(p, const_string(name), builtin_Type, (Code_Node *)code_type_alias(p, const_string(name)), true));
+  scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type, true));
   add_default_type("Type");
   add_default_type("void");
   add_default_type("u8");
@@ -492,7 +485,7 @@ int main() {
   res.arena = arena;
   res.parser = p;
   
-  resolve_decls(&res, parse_result, global_scope);
+  resolve_decls(res, parse_result, global_scope);
   
   return 0;
 }

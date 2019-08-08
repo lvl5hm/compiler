@@ -3,20 +3,35 @@
 Code_Type *builtin_Type = 0;
 Code_Type *builtin_i32 = 0;
 
+Arena _scratch_arena;
+Arena *scratch_arena = &_scratch_arena;
+
+
+char *tcstring(String str) {
+  char *result = to_c_string(scratch_arena, str);
+  return result;
+}
+
+void builder_write(String str) {
+  printf(tcstring(str));
+}
+
 typedef struct {
   Code_Stmt_Decl **top_decls;
   Arena *arena;
-  Resolve_State need_state;
   Code_Stmt_Decl *decl;
   Parser *parser;
+  Code_Func *current_func;
+  
+  b32 is_inside_func_typedef;
 } Resolver;
 
 
-b32 need_resolve(Resolver *res, Resolve_State state) {
-  b32 result = res->decl->resolve_state < state &&
-    res->need_state == state;
-  return result;
-}
+typedef struct {
+  i32 indent;
+  Resolver *res;
+  String enum_name;
+} Emitter;
 
 Scope *alloc_scope(Arena *arena, Scope *parent) {
   Scope *result = arena_push_struct(arena, Scope);
@@ -107,35 +122,30 @@ b32 check_types(Code_Type *a, Code_Type *b) {
 }
 
 
-void resolve_decl(Resolver *, Scope *, Code_Stmt_Decl *);
-void resolve_expr(Resolver *, Scope *, Code_Expr *);
-void resolve_stmt(Resolver *, Scope *, Code_Stmt *);
-void resolve_stmt_block(Resolver *, Scope *, Code_Stmt_Block *, b32);
-void resolve_and_emit_decl(Resolver *, Scope *, Code_Stmt_Decl *);
+void resolve_name(Resolver, Scope *, String, Resolve_State);
+void resolve_decl_partial(Resolver, Scope *, Code_Stmt_Decl *);
+void resolve_decl_full(Resolver, Scope *, Code_Stmt_Decl *);
+void resolve_expr(Resolver, Scope *, Code_Expr *);
+void resolve_stmt(Resolver, Scope *, Code_Stmt *);
+void resolve_stmt_block(Resolver, Scope *, Code_Stmt_Block *, b32);
 
-void resolve_name(Resolver *res, Scope *scope, String name, Resolve_State state) {
-  for (u32 i = 0; i < sb_count(res->top_decls); i++) {
-    Code_Stmt_Decl *decl = res->top_decls[i];
-    if (string_compare(decl->name, name)) {
-      Resolve_State old_state = res->need_state;
-      res->need_state = state;
-      resolve_and_emit_decl(res, get_global_scope(scope), decl);
-      res->need_state = old_state;
-      break;
-    }
-  }
-}
 
-void resolve_stmt(Resolver *res, Scope *scope, Code_Stmt *stmt) {
+void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
   switch (stmt->kind) {
     case Stmt_Kind_DECL: {
-      resolve_decl(res, scope, &stmt->decl);
+      resolve_decl_full(res, scope, &stmt->decl);
     } break;
     case Stmt_Kind_ASSIGN: {
       resolve_expr(res, scope, stmt->assign.left);
       resolve_expr(res, scope, stmt->assign.right);
       // TODO(lvl5): make sure the operator makes sense
       // no += for structs, etc
+      
+      if (stmt->assign.left->kind == Expr_Kind_NAME) {
+        // NOTE(lvl5): can't assign to const variables
+        Code_Stmt_Decl *left = scope_get(scope, stmt->assign.left->name.name)->decl;
+        assert(!left->is_const);
+      }
       check_types(stmt->assign.left->type, stmt->assign.right->type);
     } break;
     case Stmt_Kind_EXPR: {
@@ -152,7 +162,7 @@ void resolve_stmt(Resolver *res, Scope *scope, Code_Stmt *stmt) {
       resolve_stmt_block(res, scope, &stmt->block, /*is_func_body*/ false);
     } break;
     case Stmt_Kind_FOR: {
-      resolve_decl(res, scope, stmt->for_s.init);
+      resolve_decl_full(res, scope, stmt->for_s.init);
       resolve_expr(res, scope, stmt->for_s.cond);
       resolve_stmt(res, scope, stmt->for_s.post);
       resolve_stmt(res, scope, stmt->for_s.body);
@@ -160,16 +170,19 @@ void resolve_stmt(Resolver *res, Scope *scope, Code_Stmt *stmt) {
     case Stmt_Kind_KEYWORD: {
       // TODO(lvl5): make sure the keyword makes sense?
       resolve_expr(res, scope, stmt->keyword.expr);
+      if (stmt->keyword.keyword == T_RETURN) {
+        check_types(stmt->keyword.expr->type, res.current_func->type->return_type);
+      }
     } break;
     
     default: assert(false);
   }
 }
 
-void resolve_stmt_block(Resolver *res, Scope *scope, Code_Stmt_Block *block, b32 is_func_body) {
+void resolve_stmt_block(Resolver res, Scope *scope, Code_Stmt_Block *block, b32 is_func_body) {
   Scope *child_scope = scope;
   if (!is_func_body) {
-    child_scope = alloc_scope(res->arena, scope);
+    child_scope = alloc_scope(res.arena, scope);
   }
   for (u32 i = 0; i < sb_count(block->statements); i++) {
     Code_Stmt *stmt = block->statements[i];
@@ -182,27 +195,26 @@ Code_Type *get_builtin_type(Scope *scope, String name) {
   return result;
 }
 
-void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
+void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
   switch (type->kind) {
     case Type_Kind_ENUM: {
-      Scope *child_scope = alloc_scope(res->arena, scope);
+      Scope *child_scope = alloc_scope(res.arena, scope);
       type->enum_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
         String member = type->enum_t.members[i];
         scope_add(child_scope,
-                  code_stmt_decl(res->parser, member, builtin_i32,
-                                 (Code_Node *)code_expr_int(res->parser, i)
-                                 ));
+                  code_stmt_decl(res.parser, member, builtin_i32,
+                                 (Code_Node *)code_expr_int(res.parser, i), true));
       }
       type->enum_t.item_type = builtin_i32;
     } break;
     
     case Type_Kind_STRUCT: {
-      Scope *child_scope = alloc_scope(res->arena, scope);
+      Scope *child_scope = alloc_scope(res.arena, scope);
       type->struct_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->struct_t.members); i++) {
         Code_Stmt_Decl *member = type->struct_t.members[i];
-        resolve_decl(res, child_scope, member);
+        resolve_decl_full(res, child_scope, member);
       }
     } break;
     
@@ -215,7 +227,11 @@ void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
     } break;
     
     case Type_Kind_ALIAS: {
-      resolve_name(res, scope, type->alias.name, Resolve_State_FULL);
+      if (res.is_inside_func_typedef) {
+        resolve_name(res, scope, type->alias.name, Resolve_State_PARTIAL);
+      } else {
+        resolve_name(res, scope, type->alias.name, Resolve_State_FULL);
+      }
     } break;
     
     case Type_Kind_ARRAY: {
@@ -223,18 +239,19 @@ void resolve_type(Resolver *res, Scope *scope, Code_Type *type) {
     } break;
     
     case Type_Kind_FUNC: {
+      sb_push(type->func.params, code_stmt_decl(res.parser, const_string("ctx"), (Code_Type *)code_type_alias(res.parser, const_string("Context")), 0, false));
+      
       for (u32 i = 0; i < sb_count(type->func.params); i++) {
         Code_Stmt_Decl *param = type->func.params[i];
-        resolve_decl(res, scope, param);
+        resolve_decl_full(res, scope, param);
       }
-      resolve_type(res, scope, type->func.return_type);
     } break;
     
     default: assert(false);
   }
 }
 
-void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
+void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
   // TODO(lvl5): set type type_info on the expression
   switch (expr->kind) {
     case Expr_Kind_TYPE: {
@@ -254,8 +271,9 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
           expr->type_e.pointer.base = base;
           expr->type = builtin_Type;
         } else {
-          expr->type = (Code_Type *)code_type_pointer(res->parser, 
-                                                      expr->unary.val->type);
+          expr->type = 
+            (Code_Type *)code_type_pointer(res.parser, 
+                                           expr->unary.val->type);
         }
       } else if (expr->unary.op == T_DEREF) {
         expr->type = expr->unary.val->type->pointer.base;
@@ -322,11 +340,50 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
           }
           assert(member_type);
           check_types(member_type, expr->binary.right->type);
-          expr->type = (Code_Type *)code_type_alias(res->parser, enum_alias);
+          expr->type = (Code_Type *)code_type_alias(res.parser, enum_alias);
         }
       } else {
         resolve_expr(res, scope, expr->binary.right);
-        check_types(expr->binary.left->type, expr->binary.right->type);
+        // TODO(lvl5): need something like get_final_type to get rid of all the type aliases
+        if (expr->binary.left->type->kind == Type_Kind_PTR) {
+          switch (expr->binary.op) {
+            case T_ADD: {
+              // TODO(lvl5): is_type_integer or something
+              // or add a typeinfo into symbol table
+              String type_name = expr->binary.right->type->alias.name;
+              b32 legal_pointer_arithmetic = 
+                string_compare(type_name, const_string("i8")) ||
+                string_compare(type_name, const_string("i16")) ||
+                string_compare(type_name, const_string("i32")) ||
+                string_compare(type_name, const_string("i64")) ||
+                string_compare(type_name, const_string("u8")) ||
+                string_compare(type_name, const_string("u16")) ||
+                string_compare(type_name, const_string("u32")) ||
+                string_compare(type_name, const_string("u64"));
+              
+              assert(legal_pointer_arithmetic);
+            } break;
+            
+            case T_SUB: {
+              String type_name = expr->binary.right->type->alias.name;
+              b32 legal_pointer_arithmetic = 
+                expr->binary.right->type->kind == Type_Kind_PTR ||
+                string_compare(type_name, const_string("i8")) ||
+                string_compare(type_name, const_string("i16")) ||
+                string_compare(type_name, const_string("i32")) ||
+                string_compare(type_name, const_string("i64")) ||
+                string_compare(type_name, const_string("u8")) ||
+                string_compare(type_name, const_string("u16")) ||
+                string_compare(type_name, const_string("u32")) ||
+                string_compare(type_name, const_string("u64"));
+              
+              assert(legal_pointer_arithmetic);
+            } break;
+            default: assert(false);
+          }
+        } else {
+          check_types(expr->binary.left->type, expr->binary.right->type);
+        }
         expr->type = expr->binary.left->type;
       }
       
@@ -358,11 +415,16 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
         goto RESOLVE_CAST_LABEL;
       }
       
-      for (u32 i = 0; i < sb_count(expr->call.args); i++) {
-        Code_Expr *arg = expr->call.args[i];
+      Code_Stmt_Decl **params = expr->call.func->type->func.params;
+      Code_Expr **args = expr->call.args;
+      sb_push(args, (Code_Expr *)code_expr_name(res.parser, const_string("ctx")));
+      
+      assert(sb_count(args) == sb_count(params));
+      for (u32 i = 0; i < sb_count(params); i++) {
+        Code_Expr *arg = args[i];
         resolve_expr(res, scope, arg);
         
-        Code_Stmt_Decl *param = expr->call.func->type->func.params[i];
+        Code_Stmt_Decl *param = params[i];
         check_types(arg->type, param->type);
       }
       
@@ -384,7 +446,7 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
     case Expr_Kind_STRING: {
       resolve_name(res, scope, const_string("string"), Resolve_State_FULL);
       resolve_name(res, scope, const_string("__string_make"), Resolve_State_FULL);
-      expr->type = (Code_Type *)code_type_alias(res->parser, const_string("string"));
+      expr->type = (Code_Type *)code_type_alias(res.parser, const_string("string"));
     } break;
     case Expr_Kind_NAME: {
       resolve_name(res, scope, expr->name.name, Resolve_State_FULL);
@@ -404,61 +466,131 @@ void resolve_expr(Resolver *res, Scope *scope, Code_Expr *expr) {
   assert(expr->type);
 }
 
-void resolve_func(Resolver *res, Scope *scope, Code_Func *func) {
-  Scope *child_scope = alloc_scope(res->arena, scope);
-  func->scope = child_scope;
-  
-  if (res->decl->resolve_state < Resolve_State_PARTIAL &&
-      res->need_state >= Resolve_State_PARTIAL) {
-    resolve_type(res, child_scope, (Code_Type *)func->type);
-  }
-  if (need_resolve(res, Resolve_State_FULL)) {
-    resolve_stmt_block(res, child_scope, func->body, /* is_func_body */ true);
-  }
-}
-
-void resolve_decl(Resolver *res, Scope *scope, Code_Stmt_Decl *decl) {
-  if (decl->resolve_state >= res->need_state) {
-    return;
-  }
-  
+void resolve_decl_partial(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
   if (decl->type) {
     resolve_type(res, scope, decl->type);
   }
   
   if (decl->value) {
+    Code_Type *value_type = 0;
+    
     switch (decl->value->kind) {
       case Code_Kind_EXPR: {
-        if (need_resolve(res, Resolve_State_PARTIAL)) {
-          assert(decl->value->expr.kind == Expr_Kind_TYPE &&
-                 decl->value->expr.type_e.kind == Type_Kind_STRUCT);
-        } else {
-          resolve_expr(res, scope, &decl->value->expr);
-        }
-        if (decl->type) {
-          check_types(decl->type, decl->value->expr.type);
-        } else {
-          decl->type = decl->value->expr.type;
+        Code_Expr *expr = &decl->value->expr;
+        if (expr->kind == Expr_Kind_TYPE &&
+            expr->type_e.kind == Type_Kind_STRUCT) {
+          value_type = builtin_Type;
+          decl->check_state = Resolve_State_PARTIAL;
+        } else if (expr->kind == Expr_Kind_TYPE &&
+                   expr->type_e.kind == Type_Kind_FUNC) {
+          Resolver child_res = res;
+          child_res.is_inside_func_typedef = true;
+          resolve_expr(child_res, scope, expr);
+          value_type = expr->type;
+          decl->check_state = Resolve_State_FULL;
+        }else {
+          resolve_expr(res, scope, expr);
+          value_type = expr->type;
+          decl->check_state = Resolve_State_FULL;
         }
       } break;
       
       case Code_Kind_FUNC: {
-        Code_Type *func_type = (Code_Type *)decl->value->func.type;
-        if (need_resolve(res, Resolve_State_PARTIAL)) {
-          resolve_type(res, scope, func_type);
-        } else {
-          resolve_func(res, scope, &decl->value->func);
-        }
+        Code_Func *func = &decl->value->func;
+        value_type = (Code_Type *)func->type;
         
-        if (decl->type) {
-          check_types(decl->type, func_type);
-        } else {
-          decl->type = func_type;
-        }
+        Scope *child_scope = alloc_scope(res.arena, scope);
+        func->scope = child_scope;
+        resolve_type(res, child_scope, value_type);
+        decl->check_state = Resolve_State_PARTIAL;
       } break;
       
       default: assert(false);
     }
+    
+    if (decl->type) {
+      check_types(decl->type, value_type);
+    } else {
+      decl->type = value_type;
+    }
+    if (decl->type == builtin_Type) {
+      assert(decl->is_const);
+    }
   }
   scope_add(scope, decl);
+}
+
+void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
+  if (decl->check_state == Resolve_State_UNRESOLVED) {
+    resolve_decl_partial(res, scope, decl);
+  }
+  
+  if (decl->check_state == Resolve_State_PARTIAL) {
+    if (decl->value) {
+      switch (decl->value->kind) {
+        case Code_Kind_EXPR: {
+          resolve_expr(res, scope, &decl->value->expr);
+        } break;
+        
+        case Code_Kind_FUNC: {
+          Resolver child_res = res;
+          res.current_func = &decl->value->func;
+          Scope *child_scope = res.current_func->scope;
+          resolve_stmt_block(res, child_scope, res.current_func->body, /* is_func_body */ true);
+        } break;
+        
+        default: assert(false);
+      }
+    }
+    decl->check_state = Resolve_State_FULL;
+  }
+}
+
+void emit_decl(Emitter *, Code_Stmt_Decl *, Resolve_State);
+void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Resolve_State state) {
+  if (decl->check_state < state) {
+    Resolver child_res = res;
+    child_res.decl = decl;
+    switch (state) {
+      case Resolve_State_PARTIAL:
+      resolve_decl_partial(res, scope, decl);
+      break;
+      
+      case Resolve_State_FULL:
+      resolve_decl_full(res, scope, decl);
+      break;
+      
+      default: assert(false);
+    }
+  }
+  
+  // emitting business
+  
+  if (decl->emit_state < state) {
+    Emitter emitter = {0};
+    emitter.indent = 0;
+    emitter.res = &res;
+    emit_decl(&emitter, decl, state);
+    
+    if (decl->value && decl->type->kind == Type_Kind_FUNC) {
+      builder_write(const_string("\n\n"));
+    } else if (decl->value && decl->value->kind == Code_Kind_EXPR &&
+               decl->value->expr.kind == Expr_Kind_TYPE &&
+               (decl->value->expr.type_e.kind == Type_Kind_STRUCT ||
+                decl->value->expr.type_e.kind == Type_Kind_ENUM)) {
+      builder_write(const_string(";\n\n"));
+    } else {
+      builder_write(const_string(";\n"));
+    }
+  }
+}
+
+void resolve_name(Resolver res, Scope *scope, String name, Resolve_State state) {
+  for (u32 i = 0; i < sb_count(res.top_decls); i++) {
+    Code_Stmt_Decl *decl = res.top_decls[i];
+    if (string_compare(decl->name, name)) {
+      resolve_and_emit_decl(res, get_global_scope(scope), decl, state);
+      break;
+    }
+  }
 }

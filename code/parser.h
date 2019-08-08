@@ -199,8 +199,10 @@ struct Code_Stmt_Decl {
   Code_Type *type;
   Code_Node *value;
   Scope *scope;
+  b32 is_const;
   
-  Resolve_State resolve_state;
+  Resolve_State check_state;
+  Resolve_State emit_state;
 };
 
 typedef enum {
@@ -270,12 +272,13 @@ Code_Node *code_node(Parser *p, Code_Kind kind) {
   return node;
 }
 
-Code_Stmt_Decl *code_stmt_decl(Parser *p, String name, Code_Type *type, Code_Node *value) {
+Code_Stmt_Decl *code_stmt_decl(Parser *p, String name, Code_Type *type, Code_Node *value, b32 is_const) {
   Code_Node *node = code_node(p, Code_Kind_STMT);
   node->stmt.kind = Stmt_Kind_DECL;
   node->stmt.decl.name = name;
   node->stmt.decl.type = type;
   node->stmt.decl.value = value;
+  node->stmt.decl.is_const = is_const;
   return (Code_Stmt_Decl *)node;
 }
 
