@@ -1,6 +1,10 @@
 #include "lexer.h"
 
 
+Arena _scratch_arena;
+Arena *scratch_arena = &_scratch_arena;
+
+
 typedef struct Code_Node Code_Node;
 typedef struct Code_Type Code_Type;
 typedef struct Code_Stmt Code_Stmt;
@@ -47,6 +51,8 @@ typedef struct {
 
 typedef struct {
   String name;
+  Code_Type *base;
+  b32 is_builtin;
 } Code_Type_Alias;
 
 
@@ -97,11 +103,16 @@ typedef struct {
 typedef struct {
   Code_Type *cast_type;
   Code_Expr *expr;
-} Code_Expr_Cast_Or_Call, Code_Expr_Cast;
+  b32 implicit;
+} Code_Expr_Cast;
 
 typedef struct {
   i64 value;
 } Code_Expr_Int;
+
+typedef struct {
+  i32 _;
+} Code_Expr_Null;
 
 typedef struct {
   f64 value;
@@ -126,13 +137,14 @@ typedef enum {
   Expr_Kind_STRUCT,
   Expr_Kind_NAME,
   Expr_Kind_TYPE,
+  Expr_Kind_NULL,
 } Expr_Kind;
 
 struct Code_Expr {
   union {
+    Code_Expr_Null null_e;
     Code_Type type_e;
     Code_Expr_Cast cast;
-    Code_Expr_Cast_Or_Call cast_or_call;
     Code_Expr_Name name;
     Code_Expr_Unary unary;
     Code_Expr_Binary binary;
@@ -172,7 +184,7 @@ typedef struct {
 } Code_Stmt_If;
 
 typedef struct {
-  Code_Stmt_Decl *init;
+  Code_Stmt *init;
   Code_Expr *cond;
   Code_Stmt *post;
   Code_Stmt *body;
@@ -200,7 +212,6 @@ struct Code_Stmt_Decl {
   String name;
   Code_Type *type;
   Code_Node *value;
-  Scope *scope;
   b32 is_const;
   
   Resolve_State check_state;
@@ -260,7 +271,8 @@ typedef struct {
   Arena *arena;
   Token *tokens;
   u32 i;
-  i32 error_count;
+  
+  String *errors;
   
   Parser_Flag flags;
 } Parser;
@@ -306,6 +318,12 @@ Code_Expr_Name *code_expr_name(Parser *p, String name) {
   node->expr.kind = Expr_Kind_NAME;
   node->expr.name.name = name;
   return (Code_Expr_Name *)node;
+}
+
+Code_Expr_Null *code_expr_null(Parser *p) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_NULL;
+  return (Code_Expr_Null *)node;
 }
 
 Code_Expr_String *code_expr_string(Parser *p, String value) {
@@ -388,12 +406,6 @@ Code_Expr_Cast *code_expr_cast(Parser *p, Code_Type *cast_type, Code_Expr *expr)
   return (Code_Expr_Cast*)node;
 }
 
-Code_Expr_Cast_Or_Call *code_expr_cast_or_call(Parser *p, Code_Type *cast_type, Code_Expr *expr) {
-  Code_Expr_Cast_Or_Call *node = code_expr_cast(p, cast_type, expr);
-  ((Code_Expr *)node)->kind = Expr_Kind_CAST_OR_CALL;
-  return (Code_Expr_Cast_Or_Call *)node;
-}
-
 Code_Expr_Int *code_expr_int(Parser *p, i64 value) {
   Code_Node *node = code_node(p, Code_Kind_EXPR);
   node->expr.kind = Expr_Kind_INT;
@@ -426,7 +438,7 @@ Code_Stmt_If *code_stmt_if(Parser *p, Code_Expr *cond, Code_Stmt *then_branch, C
   return (Code_Stmt_If *)node;
 }
 
-Code_Stmt_For *code_stmt_for(Parser *p, Code_Stmt_Decl *init, Code_Expr *cond, Code_Stmt *post, Code_Stmt *body) {
+Code_Stmt_For *code_stmt_for(Parser *p, Code_Stmt *init, Code_Expr *cond, Code_Stmt *post, Code_Stmt *body) {
   Code_Node *node = code_node(p, Code_Kind_STMT);
   node->stmt.kind = Stmt_Kind_FOR;
   node->stmt.for_s.init = init;

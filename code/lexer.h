@@ -85,10 +85,12 @@ typedef enum {
   T_FOR,
   T_PUSH_CONTEXT,
   T_DEFER,
+  T_NULL,
   T_IF,
   T_KEYWORD_LAST = T_IF,
   
-  
+  T_DOUBLE_DOT,
+  T_TRIPLE_DOT,
   T_SUBSCRIPT = T_LBRACKET,
   T_DEREF = T_LESS,
   T_REF = T_MUL,
@@ -96,6 +98,7 @@ typedef enum {
 
 String Token_Kind_To_String[] = {
   [T_RETURN] = arr_string("return"),
+  [T_NULL] = arr_string("null"),
   [T_BREAK] = arr_string("break"),
   [T_FUNC] = arr_string("func"),
   [T_STRUCT] = arr_string("struct"),
@@ -125,6 +128,8 @@ String Token_Kind_To_String[] = {
   [T_DOUBLE_QUOTE] = arr_string("\""),
   [T_SINGLE_QUOTE] = arr_string("'"),
   [T_DOT] = arr_string("."),
+  [T_DOUBLE_DOT] = arr_string(".."),
+  [T_TRIPLE_DOT] = arr_string("..."),
   
   [T_MUL] = arr_string("*"),
   [T_DIV] = arr_string("/"),
@@ -222,7 +227,8 @@ Token_Kind get_keyword_kind(String str) {
 
 String get_line_from_index(String str, u32 index) {
   i32 line_start = index;
-  while (line_start > 0 && str.data[line_start] != '\n') line_start--;
+  while (line_start > 0 && str.data[line_start-1] != '\n') line_start--;
+  //while (str.data[line_start] == ' ') line_start++;
   
   i32 line_end = index;
   while (line_end < str.count && str.data[line_end] != '\n') line_end++;
@@ -393,7 +399,6 @@ Token *tokenize(Arena *arena, String src) {
         }
       } break;
       
-      case1('.', T_DOT);
       case1('\\', T_BACKSLASH);
       case1('\'', T_SINGLE_QUOTE);
       case1(',', T_COMMA);
@@ -415,6 +420,7 @@ Token *tokenize(Arena *arena, String src) {
       case2('^', T_BIT_XOR, '=', T_BIT_XOR_ASSIGN);
       case2('%', T_MOD, '=', T_MOD_ASSIGN);
       
+      case3('.', T_DOT, '.', T_DOUBLE_DOT, '.', T_TRIPLE_DOT);
       case3('-', T_SUB, '=', T_SUB_ASSIGN, '>', T_ARROW);
       case3('>', T_GREATER, '=', T_GREATER_EQUALS, '>', T_RSHIFT);
       case3('<', T_LESS, '=', T_LESS_EQUALS, '>', T_LSHIFT);

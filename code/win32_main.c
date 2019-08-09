@@ -2,11 +2,37 @@
 
 /*
 TODO:
+// TODO(lvl5): need better type system
+        // need quick access to something like final Type_Info
+        // to cut through all the aliases.
+        // it would be cool to check if param type is unsigned, then
+        // check if arg >= 0 and wrap it into implicit cast.
+        // should also check arg for size and implicit cast it
+        // if it fits
+        
+        // automatically convert ints to floats
+        // TODO(lvl5): also need to think about parsing, how do you decide
+        // that the storage value needs to be u64 or i64?
+        // TODO(lvl5): add a null pointer value
+        // TODO(lvl5): make a function like
+        // Code_Expr *maybe_implicit_cast(expr, type)
+        // that maybe wraps the expression into implicit cast
+        // possibly have special implicit casts inside if statements
+        // like pointer to bool
+        // TODO(lvl5): implicit cast to *void
+        // TODO(lvl5): implicit cast int and float expressions
+        
+        
+        [ ] automatically cast int and float literals if type of declaration is specified
+        [ ] detect if int literal overflows type / is unsigned 
+[ ] automatically cast to *void
+ [ ] disallow pointer arithmetic on *void
 [ ] defer
 [ ] functions should be emitted as pointers except for constant declarations
 [ ] sizeof
-[ ] error reporting
+[ ] error reporting in the typechecker
 [ ] compile an actual executable
+[ ] redefinition should be an error
 
 [ ] fixed length arrays
 [ ] dynamic arrays
@@ -15,8 +41,9 @@ TODO:
 [ ] decide what casts are allowed
 [ ] lvalues, rvalues, assignment, referencing and dereferencing
 [ ] if else block formatting
-[ ] better for loop
 [ ] typedefs and functions inside functions
+[ ] better for loop
+-iterate int ranges
 -iterate arrays
 -iterate enums
 [ ] while loop
@@ -27,9 +54,9 @@ TODO:
 [ ] allow omitting names in functions without bodies/typedefs??
 [ ] some kind of short syntax for functions when type already has an alias (what do you do with typedefs that omit param names?)
 
+[ ] implicit conversions
 [ ] runtime Type_Info
 [ ] varargs (Any type??)
-[ ] implicit conversions
 [ ] modules
 [ ] using
 [ ] polymorphic functions????
@@ -39,13 +66,20 @@ TODO:
 
 typedef struct {
   Code_Stmt_Decl **decls;
+  b32 success;
 } Parse_Result;
 
 Parse_Result parse(Parser *p, String src, Token *tokens) {
   Parse_Result result = {0};
   result.decls = parse_program(p);
-  
-  assert(p->error_count == 0);
+  if (sb_count(p->errors) > 0) {
+    for (u32 i = 0; i < sb_count(p->errors); i++) {
+      printf("Parser error: %s\n\n", tcstring(p->errors[i]));
+    }
+    result.success = false;
+  } else {
+    result.success = true;
+  }
   
   return result;
 }
@@ -207,24 +241,33 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       String op = Token_Kind_To_String[expr->binary.op];
       assert(op.count);
       // TODO(lvl5): remove unneccessary parens by dealing with precedence
-      if (expr->binary.op == T_MEMBER) {
-        emit_expr(e, expr->binary.left);
-        if (expr->binary.is_enum_member) {
-          builder_write(const_string("_"));
-        } else if (expr->binary.left->type->kind == Type_Kind_PTR) {
-          builder_write(const_string("->"));
-        } else {
-          builder_write(const_string("."));
-        }
-        emit_expr(e, expr->binary.right);
-      } else {
-        builder_write(const_string("("));
-        emit_expr(e, expr->binary.left);
-        builder_write(const_string(" "));
-        builder_write(op);
-        builder_write(const_string(" "));
-        emit_expr(e, expr->binary.right);
-        builder_write(const_string(")"));
+      switch (expr->binary.op) {
+        case T_MEMBER: {
+          emit_expr(e, expr->binary.left);
+          if (expr->binary.is_enum_member) {
+            builder_write(const_string("_"));
+          } else if (expr->binary.left->type->kind == Type_Kind_PTR) {
+            builder_write(const_string("->"));
+          } else {
+            builder_write(const_string("."));
+          }
+          emit_expr(e, expr->binary.right);
+        } break;
+        case T_SUBSCRIPT: {
+          emit_expr(e, expr->binary.left);
+          builder_write(const_string("["));
+          emit_expr(e, expr->binary.right);
+          builder_write(const_string("]"));
+        } break;
+        default: {
+          builder_write(const_string("("));
+          emit_expr(e, expr->binary.left);
+          builder_write(const_string(" "));
+          builder_write(op);
+          builder_write(const_string(" "));
+          emit_expr(e, expr->binary.right);
+          builder_write(const_string(")"));
+        } break;
       }
     } break;
     case Expr_Kind_CALL: {
@@ -316,8 +359,7 @@ void emit_stmt(Emitter *e, Code_Stmt *stmt, b32 semi) {
     } break;
     case Stmt_Kind_FOR: {
       builder_write(const_string("for ("));
-      // TODO(lvl5): only top level decls should have Resolve_State
-      emit_decl(e, stmt->for_s.init, Resolve_State_FULL);
+      emit_stmt(e, stmt->for_s.init, false);
       builder_write(const_string("; "));
       emit_expr(e, stmt->for_s.cond);
       builder_write(const_string("; "));
@@ -393,7 +435,12 @@ void emit_decl(Emitter *e, Code_Stmt_Decl *decl, Resolve_State need_state) {
   switch (need_state) {
     case Resolve_State_PARTIAL: {
       if (decl->value->kind == Code_Kind_FUNC) {
-        builder_write(const_string(";\n"));
+        emit_type_prefix(e, decl->type);
+        builder_write(const_string(" "));
+        builder_write(decl->name);
+        emit_type_postfix(e, decl->type);
+        
+        builder_write(const_string(";"));
       } else if (decl->type == builtin_Type &&
                  decl->value->expr.type_e.kind == Type_Kind_STRUCT) {
         builder_write(const_string("typedef struct "));
@@ -433,6 +480,18 @@ void resolve_decls(Resolver res, Parse_Result parsed, Scope *global_scope) {
   }
 }
 
+Code_Type *add_default_type(Parser *p, Scope *global_scope, String name) {
+  Code_Type_Alias *type = code_type_alias(p, name);
+  type->is_builtin = true;
+  
+  Code_Type *type_of_type = string_compare(name, const_string("Type"))
+    ? (Code_Type *)type
+    : builtin_Type;
+  
+  scope_add(global_scope, code_stmt_decl(p, name, type_of_type, (Code_Node *)type, true));
+  return (Code_Type *)type;
+}
+
 int main() {
   Arena _arena;
   Arena *arena = &_arena;
@@ -469,40 +528,43 @@ int main() {
   p->tokens = tokens;
   p->i = 0;
   p->src = src;
+  p->errors = sb_new(arena, String, 16);
   
   Scope *global_scope = alloc_scope(arena, null);
-  builtin_Type = (Code_Type *)code_type_alias(p, const_string("Type"));
   
-#define add_default_type(name) \
-  scope_add(global_scope, code_stmt_decl(p, const_string(name), builtin_Type, (Code_Node *)code_type_alias(p, const_string(name)), true));
-  scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type, true));
-  add_default_type("Type");
-  add_default_type("void");
-  add_default_type("u8");
-  add_default_type("u16");
-  add_default_type("u32");
-  add_default_type("u64");
-  add_default_type("i8");
-  add_default_type("i16");
-  add_default_type("i32");
-  add_default_type("i64");
-  add_default_type("f32");
-  add_default_type("f64");
-  add_default_type("b32");
-  add_default_type("b8");
-  add_default_type("byte");
-  add_default_type("char");
+  // TODO(lvl5): interning types somehow?
+  builtin_Type = add_default_type(p, global_scope, const_string("Type"));
+  add_default_type(p, global_scope, const_string("u8"));
+  add_default_type(p, global_scope, const_string("u16"));
+  add_default_type(p, global_scope, const_string("u32"));
+  add_default_type(p, global_scope, const_string("u64"));
+  add_default_type(p, global_scope, const_string("i8"));
+  add_default_type(p, global_scope, const_string("i16"));
+  builtin_i32 = add_default_type(p, global_scope, const_string("i32"));
+  add_default_type(p, global_scope, const_string("i64"));
+  add_default_type(p, global_scope, const_string("u8"));
+  add_default_type(p, global_scope, const_string("u16"));
+  add_default_type(p, global_scope, const_string("u32"));
+  add_default_type(p, global_scope, const_string("u64"));
+  add_default_type(p, global_scope, const_string("b8"));
+  add_default_type(p, global_scope, const_string("b32"));
+  add_default_type(p, global_scope, const_string("byte"));
+  add_default_type(p, global_scope, const_string("char"));
+  builtin_f32 = add_default_type(p, global_scope, const_string("f32"));
+  add_default_type(p, global_scope, const_string("f64"));
+  builtin_void = add_default_type(p, global_scope, const_string("void"));
+  builtin_voidptr = (Code_Type *)code_type_pointer(p, builtin_void);
   
-  builtin_i32 = get_builtin_type(global_scope, const_string("i32"));
   
   Parse_Result parse_result = parse(p, src, tokens);
-  
-  Resolver res;
-  res.top_decls = parse_result.decls;
-  res.arena = arena;
-  res.parser = p;
-  
-  resolve_decls(res, parse_result, global_scope);
+  if (parse_result.success) {
+    Resolver res = {0};
+    res.top_decls = parse_result.decls;
+    res.arena = arena;
+    res.parser = p;
+    
+    resolve_decls(res, parse_result, global_scope);
+  }
   
   return 0;
 }

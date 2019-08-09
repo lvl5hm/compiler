@@ -5,7 +5,7 @@ Alloc_Op :: enum {
   FREE_ALL;
 }
 
-Allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte;
+Allocator :: func(size: u64, op: Alloc_Op, allocator_data: *byte, old_ptr: *byte, old_size: u64, align: u64) *byte;
 
 Arena :: struct {
   data:     *byte;
@@ -22,11 +22,11 @@ arena_make :: func(data: *byte, capacity: u64) Arena {
 
 Context :: struct {
   allocator:      Allocator;
-  allocator_data: *void;
+  allocator_data: *byte;
   scratch:        Arena;
 }
 
-arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
+arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *byte, old_ptr: *byte, old_size: u64, align: u64) *byte {
   //TODO: alignment
   arena :: (*Arena)(allocator_data);
   if op == Alloc_Op.ALLOC {
@@ -37,13 +37,13 @@ arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr:
     arena.size = u64(0);
   } else if op == Alloc_Op.REALLOC {
     result := alloc(size);
-    memory_copy((*void)(result), (*void)(old_ptr), old_size);
+    memory_copy((*byte)(result), (*byte)(old_ptr), old_size);
   }
 }
 
-memory_copy :: func(dst: *void, src: *void, size: u64) void {
+memory_copy :: func(dst: *byte, src: *byte, size: u64) void {
   for i := u64(0); i < size; i += u64(1) {
-    <(dst + i) = <(src + i);
+    dst[i] = src[i];
   }
 }
 
@@ -52,50 +52,79 @@ alloc :: func(size: u64) *byte {
   return result;
 }
 
-scratch_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *byte, old_size: u64, align: u64) *byte {
-  result := arena_allocator(size, op, (*void)(*ctx.scratch), (*byte)(0), u64(0), u64(4));
+scratch_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *byte, old_ptr: *byte, old_size: u64, align: u64) *byte {
+  result := arena_allocator(size, op, (*byte)(*ctx.scratch), (*byte)(0), u64(0), u64(4));
   return result;
 }
 
 scratch_alloc :: func(size: u64) *byte {
-  result := scratch_allocator(size, Alloc_Op.ALLOC, (*void)(0), (*byte)(0), u64(0), u64(4));
+  result := scratch_allocator(size, Alloc_Op.ALLOC, (*byte)(0), (*byte)(0), u64(0), u64(4));
   return result;
 }
 
 scratch_reset :: func() void {
-  scratch_allocator(size, Alloc_Op.FREE_ALL, (*void)(0), (*byte)(0), u64(0), u64(4));
+  scratch_allocator(u64(0), Alloc_Op.FREE_ALL, (*byte)(0), (*byte)(0), u64(0), u64(4));
 }
 
 test :: func(a: i32) i32 {
-  return a*2;
+  return a*i32(2);
+}
+
+scratch_ctx :: func() Context {
+  result := ctx;
+  result.allocator = scratch_allocator;
+  return result;
 }
 
 main :: func() i32 {
   test_string := "blabla";
-  defer {
-    test_string.count -= 4;
+
+  sum := 0;
+  for 0 .. i64(test_string.count) {
+    sum += it;
   }
-  defer scratch_reset();
 
   if 4 > 6 {
-    return 11;
+    return i32(11);
   }
 
-  aa := test(43);
+  aa := test(i32(43));
 
-  scr := ctx;
-  scr.allocator = scratch_allocator;
-  push_context scr {
-    test(11);
+  push_context scratch_ctx() {
+    test(i32(11));
+    scratch_reset();
+    something := alloc(u64(4343));
   }
 
-  return 43;
+  return i32(43);
 }
 
+/*
+__array_dynamic_new :: func(item_size: i32, capacity: i32) __Array_Dynamic {
+  result: __Array_Dynamic;
+  result.allocator = ctx.allocator;
+  result.allocator_data = ctx.allocator_data;
+  result.data = alloc(item_size*capacity + 32);
+  result.capacity = capacity;
+  result.count = 0;
+  return result;
+}
+
+__array_dynamic_add :: func(array: *__Array_Dynamic, item: *void, item_size: i32) void {
+  if array.count == array.capacity {
+    old_size := u64(array.capacity*item_size); // TODO: old_size undeclared, still works for some reason lol
+    array.capacity *= 2;
+    array.data = array.allocator(u64(array.capacity*item_size), Alloc_Op.REALLOC, array.data, u64(0), old_size, u64(4));
+  }
+
+  memory_copy(array.data + array.count*item_size, item, item_size);
+  array.count += 1;
+}
+*/
 __string_make :: func(data: *byte, count: u64) string {
   result: string;
-  result.data = alloc(count);
-  memory_copy((*void)(result.data), (*void)(data), count);
+  result.data = alloc(count); 
+  memory_copy((*byte)(result.data), (*byte)(data), count);
   result.count = count;
   return result;
 }
@@ -107,10 +136,10 @@ string :: struct {
 }
 
 __Array_Dynamic :: struct {
-  data:           *void;
+  data:           *byte;
   count:          i32;
   capacity:       i32;
 
   allocator:      Allocator;
-  allocator_data: *void;
+  allocator_data: *byte;
 }
