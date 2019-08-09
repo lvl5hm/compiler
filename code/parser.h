@@ -106,8 +106,25 @@ typedef struct {
   b32 implicit;
 } Code_Expr_Cast;
 
+typedef enum {
+  Int_Kind_NONE,
+  
+  Int_Kind_i8,
+  Int_Kind_u8,
+  
+  Int_Kind_i16,
+  Int_Kind_u16,
+  
+  Int_Kind_i32,
+  Int_Kind_u32,
+  
+  Int_Kind_i64,
+  Int_Kind_u64,
+} Int_Kind;
+
 typedef struct {
-  i64 value;
+  u64 value;
+  Int_Kind kind;
 } Code_Expr_Int;
 
 typedef struct {
@@ -398,18 +415,20 @@ Code_Expr_Unary *code_expr_unary(Parser *p, Token_Kind op, Code_Expr *val) {
   return (Code_Expr_Unary *)node;
 }
 
-Code_Expr_Cast *code_expr_cast(Parser *p, Code_Type *cast_type, Code_Expr *expr) {
+Code_Expr_Cast *code_expr_cast(Parser *p, Code_Type *cast_type, Code_Expr *expr, b32 implicit) {
   Code_Node *node = code_node(p, Code_Kind_EXPR);
   node->expr.kind = Expr_Kind_CAST;
   node->expr.cast.cast_type = cast_type;
   node->expr.cast.expr = expr;
+  node->expr.cast.implicit = implicit;
   return (Code_Expr_Cast*)node;
 }
 
-Code_Expr_Int *code_expr_int(Parser *p, i64 value) {
+Code_Expr_Int *code_expr_int(Parser *p, u64 value, Int_Kind kind) {
   Code_Node *node = code_node(p, Code_Kind_EXPR);
   node->expr.kind = Expr_Kind_INT;
   node->expr.int_e.value = value;
+  node->expr.int_e.kind = kind;
   return (Code_Expr_Int *)node;
 }
 

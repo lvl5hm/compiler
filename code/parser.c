@@ -239,7 +239,7 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
       
       Code_Expr *it_name = (Code_Expr *)code_expr_name(p, const_string("it"));
       Code_Expr *cond = (Code_Expr *)code_expr_binary(p, it_name, T_LESS, max);
-      Code_Stmt *post = (Code_Stmt *)code_stmt_assign(p, it_name, T_ADD_ASSIGN, (Code_Expr *)code_expr_int(p, 1));
+      Code_Stmt *post = (Code_Stmt *)code_stmt_assign(p, it_name, T_ADD_ASSIGN, (Code_Expr *)code_expr_int(p, 1, Int_Kind_i8));
       
       Code_Stmt *body = parse_stmt(p, true);
       result = (Code_Stmt *)code_stmt_for(p, init, cond, post, body);
@@ -300,8 +300,28 @@ Code_Expr *parse_expr_atom(Parser *p) {
     String name = parser_prev(p).value;
     result = (Code_Expr *)code_expr_name(p, name);
   } else if (parser_accept(p, T_INT)) {
-    i64 value = string_to_i64(parser_prev(p).value);
-    result = (Code_Expr *)code_expr_int(p, value);
+    u64 value = string_to_u64(parser_prev(p).value);
+    
+    Int_Kind kind = Int_Kind_u64;
+    if (value <= I8_MAX) {
+      kind = Int_Kind_i8;
+    } else if (value <= U8_MAX) {
+      kind = Int_Kind_u8;
+    } else if (value <= I16_MAX) {
+      kind = Int_Kind_i16;
+    } else if (value <= U16_MAX) {
+      kind = Int_Kind_u16;
+    } else if (value <= I32_MAX) {
+      kind = Int_Kind_i32;
+    } else if (value <= U32_MAX) {
+      kind = Int_Kind_u32;
+    } else if (value <= I64_MAX) {
+      kind = Int_Kind_i64;
+    }  else {
+      kind = Int_Kind_u64;
+    }
+    
+    result = (Code_Expr *)code_expr_int(p, value, kind);
   } else if (parser_accept(p, T_FLOAT)) {
     f64 value = string_to_f64(parser_prev(p).value);
     result = (Code_Expr *)code_expr_float(p, value);

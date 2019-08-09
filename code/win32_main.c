@@ -1,10 +1,6 @@
 #include "typechecker.c"
 
 /*
-TODO:
-// TODO(lvl5): need better type system
-        // need quick access to something like final Type_Info
-        // to cut through all the aliases.
         // it would be cool to check if param type is unsigned, then
         // check if arg >= 0 and wrap it into implicit cast.
         // should also check arg for size and implicit cast it
@@ -283,12 +279,16 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       builder_write(const_string(")"));
     } break;
     case Expr_Kind_CAST: {
-      builder_write(const_string("("));
-      emit_type_prefix(e, expr->cast.cast_type);
-      emit_type_postfix(e, expr->cast.cast_type);
-      builder_write(const_string(")("));
-      emit_expr(e, expr->cast.expr);
-      builder_write(const_string(")"));
+      if (expr->cast.implicit) {
+        emit_expr(e, expr->cast.expr);
+      } else {
+        builder_write(const_string("("));
+        emit_type_prefix(e, expr->cast.cast_type);
+        emit_type_postfix(e, expr->cast.cast_type);
+        builder_write(const_string(")("));
+        emit_expr(e, expr->cast.expr);
+        builder_write(const_string(")"));
+      }
     } break;
     case Expr_Kind_INT: {
       builder_write(i64_to_string(scratch_arena, expr->int_e.value));
@@ -302,6 +302,9 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       builder_write(const_string("\", "));
       builder_write(i64_to_string(scratch_arena, expr->string.value.count));
       builder_write(const_string(", ctx)"));
+    } break;
+    case Expr_Kind_NULL: {
+      builder_write(const_string("NULL"));
     } break;
     
     default: assert(false);
@@ -534,18 +537,15 @@ int main() {
   
   // TODO(lvl5): interning types somehow?
   builtin_Type = add_default_type(p, global_scope, const_string("Type"));
-  add_default_type(p, global_scope, const_string("u8"));
-  add_default_type(p, global_scope, const_string("u16"));
-  add_default_type(p, global_scope, const_string("u32"));
-  add_default_type(p, global_scope, const_string("u64"));
-  add_default_type(p, global_scope, const_string("i8"));
-  add_default_type(p, global_scope, const_string("i16"));
+  builtin_u8 = add_default_type(p, global_scope, const_string("u8"));
+  builtin_u16 = add_default_type(p, global_scope, const_string("u16"));
+  builtin_u32 = add_default_type(p, global_scope, const_string("u32"));
+  builtin_u64 = add_default_type(p, global_scope, const_string("u64"));
+  builtin_i8 = add_default_type(p, global_scope, const_string("i8"));
+  builtin_i16 = add_default_type(p, global_scope, const_string("i16"));
   builtin_i32 = add_default_type(p, global_scope, const_string("i32"));
-  add_default_type(p, global_scope, const_string("i64"));
-  add_default_type(p, global_scope, const_string("u8"));
-  add_default_type(p, global_scope, const_string("u16"));
-  add_default_type(p, global_scope, const_string("u32"));
-  add_default_type(p, global_scope, const_string("u64"));
+  builtin_i64 = add_default_type(p, global_scope, const_string("i64"));
+  
   add_default_type(p, global_scope, const_string("b8"));
   add_default_type(p, global_scope, const_string("b32"));
   add_default_type(p, global_scope, const_string("byte"));

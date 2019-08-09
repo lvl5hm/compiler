@@ -1,7 +1,17 @@
 #include "parser.c"
 
 Code_Type *builtin_Type = 0;
+
+Code_Type *builtin_i8 = 0;
+Code_Type *builtin_i16 = 0;
 Code_Type *builtin_i32 = 0;
+Code_Type *builtin_i64 = 0;
+
+Code_Type *builtin_u8 = 0;
+Code_Type *builtin_u16 = 0;
+Code_Type *builtin_u32 = 0;
+Code_Type *builtin_u64 = 0;
+
 Code_Type *builtin_f32 = 0;
 Code_Type *builtin_void = 0;
 Code_Type *builtin_voidptr = 0;
@@ -86,8 +96,7 @@ Code_Type *get_final_type(Code_Type *type) {
   return result;
 }
 
-// TODO(lvl5): right now this rejects foo : Allocator = arena_allocator;
-b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
+b32 _check_types(Resolver res, Code_Type *a, Code_Type *b, b32 error) {
   b32 result = false;
   a = get_final_type(a);
   b = get_final_type(b);
@@ -102,7 +111,7 @@ b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
         result = false;
       } break;
       case Type_Kind_PTR: {
-        result = check_types(res, a->pointer.base, b->pointer.base);
+        result = _check_types(res, a->pointer.base, b->pointer.base, false);
       } break;
       case Type_Kind_ARRAY: {
         result = false;
@@ -114,12 +123,12 @@ b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
           for (u32 i = 0; i < sb_count(a->func.params); i++) {
             Code_Stmt_Decl *a_param = a->func.params[i];
             Code_Stmt_Decl *b_param = b->func.params[i];
-            if (!check_types(res, a_param->type, b_param->type)) {
+            if (!_check_types(res, a_param->type, b_param->type, false)) {
               result = false;
               break;
             }
           }
-          if (!check_types(res, a->func.return_type, b->func.return_type)) {
+          if (!_check_types(res, a->func.return_type, b->func.return_type, false)) {
             result = false;
           }
         }
@@ -132,13 +141,20 @@ b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
     }
   }
   
+  if (error) {
+    assert(result);
+  }
+  
   if (!result) {
     //parser_error(res.parser, "Type error");
   }
-  assert(result);
+  
   return result;
 }
 
+b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
+  return _check_types(res, a, b, true);
+}
 
 void resolve_name(Resolver, Scope *, String, Resolve_State);
 void resolve_decl_partial(Resolver, Scope *, Code_Stmt_Decl *);
@@ -147,6 +163,108 @@ void resolve_expr(Resolver, Scope *, Code_Expr *);
 void resolve_stmt(Resolver, Scope *, Code_Stmt *);
 void resolve_stmt_block(Resolver, Scope *, Code_Stmt_Block *, b32);
 
+Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
+  Code_Expr *result = expr;
+  Code_Type *type = expr->type;
+  b32 allow_cast = false;
+#define CHECK(a, b) _check_types(res, a, b, false)
+  
+  if (CHECK(to, builtin_voidptr)) {
+    if (type->kind == Type_Kind_PTR) {
+      allow_cast = true;
+    }
+  } else if (to->kind == Type_Kind_PTR) {
+    if (expr->kind == Expr_Kind_NULL) {
+      allow_cast = true;
+    }
+  } else if (CHECK(to, builtin_i8)) {
+    
+  } else if (CHECK(to, builtin_u8)) {
+    if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type, builtin_i8)) {
+        allow_cast = true;
+      }
+    }
+  } else if (CHECK(to, builtin_i16)) {
+    if (CHECK(type, builtin_i8)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type, builtin_u8)) {
+        allow_cast = true;
+      }
+    }
+  } else if (CHECK(to, builtin_u16)) {
+    if (CHECK(type, builtin_u8)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type, builtin_i8) ||
+          CHECK(type, builtin_u8) ||
+          CHECK(type, builtin_i16)) {
+        allow_cast = true;
+      }
+    }
+  } else if (CHECK(to, builtin_i32)) {
+    if (CHECK(type, builtin_i8) || 
+        CHECK(type, builtin_i16)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type, builtin_i8) || 
+          CHECK(type, builtin_u8) ||
+          CHECK(type, builtin_i16) ||
+          CHECK(type, builtin_u16)) {
+        allow_cast = true;
+      }
+    }
+  } else if (CHECK(to, builtin_u32)) {
+    if (CHECK(type,  builtin_u8) || CHECK(type,  builtin_u16)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type,  builtin_i8) ||
+          CHECK(type,  builtin_u8) ||
+          CHECK(type,  builtin_i16) ||
+          CHECK(type,  builtin_u16) ||
+          CHECK(type,  builtin_i32)) {
+        allow_cast = true;
+      }
+    }
+  } else if (CHECK(to, builtin_i64)) {
+    if (CHECK(type,  builtin_i8) ||
+        CHECK(type,  builtin_i16) ||
+        CHECK(type,  builtin_i32)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type,  builtin_i8) || 
+          CHECK(type,  builtin_i16) ||
+          CHECK(type,  builtin_u16) ||
+          CHECK(type,  builtin_i32) ||
+          CHECK(type,  builtin_u32)) {
+        allow_cast = true;
+      }
+    }
+  }  else if (CHECK(to, builtin_u64)) {
+    if (CHECK(type,  builtin_u8) ||
+        CHECK(type,  builtin_u16) ||
+        CHECK(type,  builtin_u32)) {
+      allow_cast = true;
+    } else if (expr->kind == Expr_Kind_INT) {
+      if (CHECK(type,  builtin_i8) || 
+          CHECK(type,  builtin_u8) ||
+          CHECK(type,  builtin_i16) ||
+          CHECK(type,  builtin_u16) ||
+          CHECK(type,  builtin_i32) ||
+          CHECK(type,  builtin_u32) ||
+          CHECK(type,  builtin_i64)) {
+        allow_cast = true;
+      }
+    }
+  }
+  
+  if (allow_cast) {
+    result = (Code_Expr *)code_expr_cast(res.parser, to, expr, true);
+    result->type = to;
+  }
+  return result;
+}
 
 void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
   switch (stmt->kind) {
@@ -164,6 +282,8 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
         Code_Stmt_Decl *left = scope_get(scope, stmt->assign.left->name.name)->decl;
         assert(!left->is_const);
       }
+      stmt->assign.right = maybe_implicit_cast(res, stmt->assign.right,
+                                               stmt->assign.left->type);
       check_types(res, stmt->assign.left->type, stmt->assign.right->type);
     } break;
     case Stmt_Kind_EXPR: {
@@ -191,6 +311,7 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
         case T_RETURN: {
           assert(stmt->keyword.stmt->kind == Stmt_Kind_EXPR);
           resolve_expr(res, scope, stmt->keyword.stmt->expr.expr);
+          stmt->keyword.stmt->expr.expr = maybe_implicit_cast(res, stmt->keyword.stmt->expr.expr, res.current_func->type->return_type);
           check_types(res, stmt->keyword.stmt->expr.expr->type, res.current_func->type->return_type);
           
           if (res.current_block &&
@@ -278,9 +399,10 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
       type->enum_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
         String member = type->enum_t.members[i];
+        // TODO(lvl5): specify enum types
         scope_add(child_scope,
                   code_stmt_decl(res.parser, member, builtin_i32,
-                                 (Code_Node *)code_expr_int(res.parser, i), true));
+                                 (Code_Node *)code_expr_int(res.parser, i, Int_Kind_i32), true));
       }
       type->enum_t.item_type = builtin_i32;
     } break;
@@ -342,7 +464,6 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
     return;
   }
   
-  // TODO(lvl5): set type type_info on the expression
   switch (expr->kind) {
     case Expr_Kind_TYPE: {
       resolve_type(res, scope, &expr->type_e);
@@ -357,27 +478,40 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       // TODO(lvl5): make sure the operator makes sense
       resolve_expr(res, scope, expr->unary.val);
       
-      if (expr->unary.op == T_REF) {
-        if (expr->unary.val->type == builtin_Type) {
-          Code_Type *base = &expr->unary.val->type_e;
-          expr->kind = Expr_Kind_TYPE;
-          expr->type_e.kind = Type_Kind_PTR;
-          expr->type_e.pointer.base = base;
-          expr->type = builtin_Type;
-        } else {
-          expr->type = 
-            (Code_Type *)code_type_pointer(res.parser, 
-                                           expr->unary.val->type);
-        }
-      } else if (expr->unary.op == T_DEREF) {
-        Code_Type *right_type = expr->unary.val->type;
-        assert(right_type->kind == Type_Kind_PTR);
-        assert(right_type->pointer.base != builtin_void);
-        expr->type = right_type->pointer.base;
-      } else {
-        // TODO(lvl5): minus operator should make unsigned types
-        // signed
-        expr->type = expr->unary.val->type;
+      switch (expr->unary.op) {
+        case T_REF: {
+          // NOTE(lvl5): this can be a pointer type due to grammar
+          // ambiguety
+          if (expr->unary.val->type == builtin_Type) {
+            Code_Type *base = &expr->unary.val->type_e;
+            expr->kind = Expr_Kind_TYPE;
+            expr->type_e.kind = Type_Kind_PTR;
+            expr->type_e.pointer.base = base;
+            expr->type = builtin_Type;
+          } else {
+            expr->type = 
+              (Code_Type *)code_type_pointer(res.parser, expr->unary.val->type);
+          }
+        } break;
+        case T_DEREF: {
+          Code_Type *right_type = expr->unary.val->type;
+          assert(right_type->kind == Type_Kind_PTR);
+          assert(right_type->pointer.base != builtin_void);
+          expr->type = right_type->pointer.base;
+        } break;
+        case T_SUB: {
+          Code_Type *type = expr->unary.val->type;
+          if (type == builtin_u8) {
+            expr->type = builtin_i16;
+          } else if (type == builtin_u16) {
+            expr->type = builtin_i32;
+          } else if (type == builtin_u32 || type == builtin_u64) {
+            expr->type = builtin_i64;
+          }
+        } break;
+        default: {
+          expr->type = expr->unary.val->type;
+        } break;
       }
     } break;
     case Expr_Kind_BINARY: {
@@ -450,13 +584,16 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
         }
       } else {
         resolve_expr(res, scope, expr->binary.right);
-        // TODO(lvl5): need something like get_final_type to get rid of all the type aliases
-        if (expr->binary.left->type->kind == Type_Kind_PTR) {
+        Code_Type *left_type = get_final_type(expr->binary.left->type);
+        Code_Type *right_type = get_final_type(expr->binary.right->type);
+        
+        if (left_type->kind == Type_Kind_PTR) {
           switch (expr->binary.op) {
             case T_ADD: {
+              // TODO(lvl5): this operation should be symmetric
               // TODO(lvl5): is_type_integer or something
               // or add a typeinfo into symbol table
-              String type_name = expr->binary.right->type->alias.name;
+              String type_name = right_type->alias.name;
               b32 legal_pointer_arithmetic = 
                 string_compare(type_name, const_string("i8")) ||
                 string_compare(type_name, const_string("i16")) ||
@@ -471,9 +608,11 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
             } break;
             
             case T_SUB: {
-              String type_name = expr->binary.right->type->alias.name;
+              // TODO(lvl5): subtracting pointers is symmetric, 
+              // you can't subtract int from pointer though
+              String type_name = right_type->alias.name;
               b32 legal_pointer_arithmetic = 
-                expr->binary.right->type->kind == Type_Kind_PTR ||
+                right_type->kind == Type_Kind_PTR ||
                 string_compare(type_name, const_string("i8")) ||
                 string_compare(type_name, const_string("i16")) ||
                 string_compare(type_name, const_string("i32")) ||
@@ -487,10 +626,17 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
             } break;
             default: assert(false);
           }
+          // TODO(lvl5): the type should be whichever side was the pointer
+          expr->type = left_type;
         } else {
-          check_types(res, expr->binary.left->type, expr->binary.right->type);
+          expr->binary.left = maybe_implicit_cast(res, expr->binary.left, right_type);
+          left_type = expr->binary.left->type;
+          expr->binary.right = maybe_implicit_cast(res, expr->binary.right, left_type);
+          right_type = expr->binary.right->type;
+          
+          check_types(res, left_type, right_type);
+          expr->type = left_type;
         }
-        expr->type = expr->binary.left->type;
       }
       
       // TODO(lvl5): implicit conversions?
@@ -517,18 +663,12 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       
       assert(sb_count(args) == sb_count(params));
       for (u32 i = 0; i < sb_count(params); i++) {
-        Code_Expr *arg = args[i];
-        resolve_expr(res, scope, arg);
+        resolve_expr(res, scope, args[i]);
         
         Code_Stmt_Decl *param = params[i];
         
-        switch (arg->kind) {
-          case Expr_Kind_INT: {
-            
-          } break;
-        }
-        
-        check_types(res, arg->type, param->type);
+        args[i] = maybe_implicit_cast(res, args[i], param->type);
+        check_types(res, args[i]->type, param->type);
       }
       
       expr->type = sig->return_type;
@@ -541,7 +681,27 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       expr->type = expr->cast.cast_type;
     } break;
     case Expr_Kind_INT: {
-      expr->type = &scope_get(scope, const_string("i64"))->decl->value->expr.type_e;
+      switch (expr->int_e.kind) {
+        case Int_Kind_i8:
+        expr->type = builtin_i8; break;
+        case Int_Kind_i16:
+        expr->type = builtin_i16; break;
+        case Int_Kind_i32:
+        expr->type = builtin_i32; break;
+        case Int_Kind_i64:
+        expr->type = builtin_i64; break;
+        
+        case Int_Kind_u8:
+        expr->type = builtin_u8; break;
+        case Int_Kind_u16:
+        expr->type = builtin_u16; break;
+        case Int_Kind_u32:
+        expr->type = builtin_u32; break;
+        case Int_Kind_u64:
+        expr->type = builtin_u64; break;
+        
+        default: assert(false);
+      }
     } break;
     case Expr_Kind_FLOAT: {
       expr->type = &scope_get(scope, const_string("f32"))->decl->value->expr.type_e;
@@ -612,6 +772,11 @@ void resolve_decl_partial(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
     }
     
     if (decl->type) {
+      if (decl->type != builtin_Type &&
+          decl->type->kind != Type_Kind_FUNC) {
+        decl->value = (Code_Node *)maybe_implicit_cast(res, &decl->value->expr, decl->type);
+        value_type = decl->value->expr.type;
+      }
       check_types(res, decl->type, value_type);
     } else {
       decl->type = value_type;
