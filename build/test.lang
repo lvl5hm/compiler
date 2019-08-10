@@ -1,7 +1,6 @@
-byte :: u8;
-char :: i8;
 b32 :: i32;
 b8 :: i8;
+byte :: u8;
 
 Alloc_Op :: enum {
   ALLOC;
@@ -18,140 +17,12 @@ Arena :: struct {
   size:     u64;
 }
 
-arena_make :: func(data: *byte, capacity: u64) Arena {
-  result: Arena;
-  result.data = data;
-  result.capacity = capacity;
-  return result;
-}
-
 Context :: struct {
   allocator:      Allocator;
   allocator_data: *void;
   scratch:        Arena;
 }
 
-arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *void, old_size: u64, align: u64) *byte {
-  //TODO: alignment
-  arena :: (*Arena)(allocator_data);
-  if op == Alloc_Op.ALLOC {
-    result := arena.data + arena.size;
-    arena.size += size;
-    return result;
-  } else if op == Alloc_Op.FREE_ALL {
-    arena.size = 0;
-  } else if op == Alloc_Op.REALLOC {
-    result := alloc(size);
-    memory_copy(result, old_ptr, old_size);
-  }
-}
-
-memory_copy :: func(dst: *void, src: *void, size: u64) {
-  for i : u64 = 0; i < size; i += 1 {
-    (*byte)(dst)[i] = (*byte)(src)[i]; // i think in C [i] has greater precedence than (*byte), so this is wrong
-    // double check this and emit extra parenthesis if needed
-  }
-}
-
-alloc :: func(size: u64) *void {
-  result := ctx.allocator(size, Alloc_Op.ALLOC, ctx.allocator_data, null, 0, 4);
-  return result;
-}
-
-free :: func(ptr: *void) {
-  ctx.allocator(0, Alloc_Op.FREE, ctx.allocator_data, ptr, 0, 0);
-}
-
-scratch_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *void, old_size: u64, align: u64) *byte {
-  result := arena_allocator(size, op, *ctx.scratch, null, 0, 4);
-  return result;
-}
-
-scratch_alloc :: func(size: u64) *byte {
-  result := scratch_allocator(size, Alloc_Op.ALLOC, null, null, 0, 4);
-  return result;
-}
-
-scratch_reset :: func() {
-  scratch_allocator(0, Alloc_Op.FREE_ALL, null, null, 0, 4);
-}
-
-test :: func(a: i32) i32 {
-  return a*2;
-}
-
-scratch_ctx :: func() Context {
-  result := ctx;
-  result.allocator = scratch_allocator;
-  return result;
-}
-
-Buffer :: struct {
-  data: *void;
-  size: u64;
-}
-
-file_read_all :: func(file_name: string) Buffer {
-  result: Buffer;
-  result.data = alloc(10000);
-  result.size = 10000;
-  return result;
-}
-
-buffer_free :: func(buffer: Buffer) {
-  free(buffer.data);
-}
-
-main :: func() i32 {
-  if 4232 {
-    file := file_read_all("test.txt");
-    defer buffer_free(file);
-  }
-
-  foo := "stop this";
-}
-
-__array_dynamic_new :: func(item_size: u32, capacity: u32) __Array_Dynamic {
-  result: __Array_Dynamic;
-  result.allocator = ctx.allocator;
-  result.allocator_data = ctx.allocator_data;
-  result.data = alloc(u64(item_size*capacity + 32));
-  result.capacity = capacity;
-  result.count = 0;
-  return result;
-}
-
-
-__array_dynamic_add :: func(array: *__Array_Dynamic, item: *void, item_size: u32) {
-  if array.count == array.capacity {
-    old_size := array.capacity*item_size; // TODO: old_size undeclared, still works for some reason lol
-    array.capacity *= 2;
-    array.data = array.allocator(array.capacity*item_size, Alloc_Op.REALLOC, array.data, null, old_size, 4);
-  }
-
-  memory_copy(array.data + array.count*item_size, item, item_size);
-  array.count += 1;
-}
-
-__string_make :: func(data: *byte, count: u64) string {
-  result: string;
-  result.data = (*byte)(alloc(count)); 
-  memory_copy(result.data, data, count);
-  result.count = count;
-  return result;
-}
-
-
-string :: struct {
-  data:  *byte;
-  count: u64;
-}
-
-__Array_Dynamic :: struct {
-  data:           *void;
-  count:          u32;
-  capacity:       u32;
-
-  allocator:      Allocator;
-  allocator_data: *void;
+main :: func() {
+  foo := 256;
 }

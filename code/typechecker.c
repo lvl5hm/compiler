@@ -24,12 +24,11 @@ char *tcstring(String str) {
   return result;
 }
 
-void builder_write(String str) {
-  printf(tcstring(str));
-}
+typedef struct Emitter Emitter;
 
 typedef struct {
   Code_Stmt_Decl **top_decls;
+  Emitter *emitter;
   Arena *arena;
   Code_Stmt_Decl *decl;
   Parser *parser;
@@ -41,11 +40,12 @@ typedef struct {
 } Resolver;
 
 
-typedef struct {
+struct Emitter {
   i32 indent;
   Resolver *res;
   String enum_name;
-} Emitter;
+  String_Builder *builder;
+};
 
 Scope *alloc_scope(Arena *arena, Scope *parent) {
   Scope *result = arena_push_struct(arena, Scope);
@@ -145,19 +145,24 @@ b32 _check_types(Resolver res, Code_Type *a, Code_Type *b, b32 error) {
     }
   }
   
-  if (error) {
-    assert(result);
-  }
-  
-  if (!result) {
-    //parser_error(res.parser, "Type error");
-  }
-  
   return result;
 }
 
 b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
-  return _check_types(res, a, b, true);
+  b32 result = _check_types(res, a, b, true);
+  if (!result) {
+    Code_Node *node = (Code_Node *)a;
+    Token first_token = res.parser->tokens[node->first_token];
+    Token last_token = res.parser->tokens[node->last_token];
+    i64 count = last_token.value.data - first_token.value.data + last_token.value.count;
+    
+    char *first_type_str = tcstring(substring(first_token.value, 0, (u32)count));
+    char *second_type_str = "test test";
+    //tcstring(substring(first_token.value, 0, (u32)count));
+    parser_error(res.parser, first_token, "types '%s' and '%s' are incompatible;",
+                 first_type_str, second_type_str);
+  }
+  return result;
 }
 
 void resolve_name(Resolver, Scope *, String, Resolve_State);
@@ -185,7 +190,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
     
   } else if (CHECK(to, builtin_u8)) {
     if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type, builtin_i8)) {
+      if (expr->int_e.size < 8) {
         allow_cast = true;
       }
     }
@@ -193,7 +198,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
     if (CHECK(type, builtin_i8)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type, builtin_u8)) {
+      if (expr->int_e.size < 15) {
         allow_cast = true;
       }
     }
@@ -201,9 +206,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
     if (CHECK(type, builtin_u8)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type, builtin_i8) ||
-          CHECK(type, builtin_u8) ||
-          CHECK(type, builtin_i16)) {
+      if (expr->int_e.size < 16) {
         allow_cast = true;
       }
     }
@@ -212,10 +215,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
         CHECK(type, builtin_i16)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type, builtin_i8) || 
-          CHECK(type, builtin_u8) ||
-          CHECK(type, builtin_i16) ||
-          CHECK(type, builtin_u16)) {
+      if (expr->int_e.size < 31) {
         allow_cast = true;
       }
     }
@@ -223,11 +223,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
     if (CHECK(type,  builtin_u8) || CHECK(type,  builtin_u16)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type,  builtin_i8) ||
-          CHECK(type,  builtin_u8) ||
-          CHECK(type,  builtin_i16) ||
-          CHECK(type,  builtin_u16) ||
-          CHECK(type,  builtin_i32)) {
+      if (expr->int_e.size < 32) {
         allow_cast = true;
       }
     }
@@ -237,11 +233,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
         CHECK(type,  builtin_i32)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type,  builtin_i8) || 
-          CHECK(type,  builtin_i16) ||
-          CHECK(type,  builtin_u16) ||
-          CHECK(type,  builtin_i32) ||
-          CHECK(type,  builtin_u32)) {
+      if (expr->int_e.size < 63) {
         allow_cast = true;
       }
     }
@@ -251,13 +243,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
         CHECK(type,  builtin_u32)) {
       allow_cast = true;
     } else if (expr->kind == Expr_Kind_INT) {
-      if (CHECK(type,  builtin_i8) || 
-          CHECK(type,  builtin_u8) ||
-          CHECK(type,  builtin_i16) ||
-          CHECK(type,  builtin_u16) ||
-          CHECK(type,  builtin_i32) ||
-          CHECK(type,  builtin_u32) ||
-          CHECK(type,  builtin_i64)) {
+      if (expr->int_e.size < 64) {
         allow_cast = true;
       }
     }
@@ -422,7 +408,7 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
         // TODO(lvl5): specify enum types
         scope_add(child_scope,
                   code_stmt_decl(res.parser, member, builtin_i32,
-                                 (Code_Node *)code_expr_int(res.parser, i, Int_Kind_i32), true));
+                                 (Code_Node *)code_expr_int(res.parser, i, 31), true));
       }
       type->enum_t.item_type = builtin_i32;
     } break;
@@ -495,7 +481,6 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
     } break;
     
     case Expr_Kind_UNARY: {
-      // TODO(lvl5): make sure the operator makes sense
       resolve_expr(res, scope, expr->unary.val);
       
       switch (expr->unary.op) {
@@ -535,7 +520,6 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       }
     } break;
     case Expr_Kind_BINARY: {
-      // TODO(lvl5): make sure the operator makes sense
       resolve_expr(res, scope, expr->binary.left);
       
       if (expr->binary.op == T_SUBSCRIPT) {
@@ -547,7 +531,7 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
           expr->type = left_type->array.item_type;
         } else if (left_type->kind == Type_Kind_PTR) {
           expr->type = left_type->pointer.base;
-          // TODO(lvl5): they can probably be different pointers, so this can fail
+          // TODO(lvl5): they can probably be different pointers, so this can fail (INTERNING?)
           assert(left_type->pointer.base != builtin_void);
         } else {
           assert(false);
@@ -701,23 +685,23 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       expr->type = expr->cast.cast_type;
     } break;
     case Expr_Kind_INT: {
-      switch (expr->int_e.kind) {
-        case Int_Kind_i8:
+      switch (expr->int_e.size) {
+        case 7:
         expr->type = builtin_i8; break;
-        case Int_Kind_i16:
+        case 15:
         expr->type = builtin_i16; break;
-        case Int_Kind_i32:
+        case 31:
         expr->type = builtin_i32; break;
-        case Int_Kind_i64:
+        case 63:
         expr->type = builtin_i64; break;
         
-        case Int_Kind_u8:
+        case 8:
         expr->type = builtin_u8; break;
-        case Int_Kind_u16:
+        case 16:
         expr->type = builtin_u16; break;
-        case Int_Kind_u32:
+        case 32:
         expr->type = builtin_u32; break;
-        case Int_Kind_u64:
+        case 64:
         expr->type = builtin_u64; break;
         
         default: assert(false);
@@ -835,7 +819,7 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
   }
 }
 
-void emit_decl(Emitter *, Code_Stmt_Decl *, Resolve_State);
+void emit_top_decl(Emitter *, Code_Stmt_Decl *, Resolve_State);
 void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Resolve_State state) {
   if (decl->check_state < state) {
     Resolver child_res = res;
@@ -853,23 +837,14 @@ void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Res
     }
   }
   
-  // emitting business
-  
-  if (decl->emit_state < state) {
-    Emitter emitter = {0};
-    emitter.indent = 0;
-    emitter.res = &res;
-    emit_decl(&emitter, decl, state);
-    
-    if (decl->value && decl->type->kind == Type_Kind_FUNC) {
-      builder_write(const_string("\n\n"));
-    } else if (decl->value && decl->value->kind == Code_Kind_EXPR &&
-               decl->value->expr.kind == Expr_Kind_TYPE &&
-               (decl->value->expr.type_e.kind == Type_Kind_STRUCT ||
-                decl->value->expr.type_e.kind == Type_Kind_ENUM)) {
-      builder_write(const_string(";\n\n"));
-    } else {
-      builder_write(const_string(";\n"));
+  if (sb_count(res.parser->errors) > 0) {
+    for (u32 i = 0; i < sb_count(res.parser->errors); i++) {
+      printf("Type error: %s\n\n", tcstring(res.parser->errors[i]));
+    }
+  } else {
+    // emitting business
+    if (decl->emit_state < state) {
+      emit_top_decl(res.emitter, decl, state);
     }
   }
 }

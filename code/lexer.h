@@ -170,25 +170,6 @@ String Token_Kind_To_String[] = {
 };
 
 
-typedef struct {
-  byte *data;
-  u64 size;
-} Buffer;
-Buffer read_entire_file(Arena *arena, String file_name) {
-  Buffer result;
-  FILE *file;
-  char *c_file_name = to_c_string(arena, file_name);
-  fopen_s(&file, c_file_name, "rb");
-  fseek(file, 0, SEEK_END);
-  result.size = ftell(file);
-  fseek(file, 0, SEEK_SET);
-  result.data = arena_push_array(arena, byte, result.size + 1);
-  
-  fread(result.data, result.size, 1, file);
-  
-  return result;
-}
-
 b32 is_digit(char c) {
   b32 result = c >= '0' && c <= '9';
   return result;

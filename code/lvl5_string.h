@@ -363,6 +363,39 @@ String arena_sprintf(Arena *arena, String fmt, ...) {
   return result;
 }
 
+#define STRING_BUILDER_BLOCK_MAX 1024
+typedef struct String_Builder_Block String_Builder_Block;
+struct String_Builder_Block {
+  char data[STRING_BUILDER_BLOCK_MAX];
+  String_Builder_Block *next;
+};
+
+typedef struct {
+  String_Builder_Block first;
+  String_Builder_Block *cur;
+  u64 count_in_block;
+  Arena *arena;
+} String_Builder;
+
+void builder_init(String_Builder *builder, Arena *arena) {
+  builder->arena = arena;
+  builder->cur = &builder->first;
+  builder->count_in_block = 0;
+  builder->first.next = 0;
+}
+
+void builder_write(String_Builder *builder, String str) {
+  for (i32 i = 0; i < str.count; i++) {
+    builder->cur->data[builder->count_in_block++] = str.data[i];
+    if (builder->count_in_block == STRING_BUILDER_BLOCK_MAX) {
+      String_Builder_Block *next = arena_push_struct(builder->arena, String_Builder_Block);
+      builder->cur->next = next;
+      builder->cur = next;
+    }
+  }
+}
+
+
 
 #define LVL5_STRING
 #endif

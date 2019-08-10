@@ -19,10 +19,10 @@
 #define I16_MAX 0x7FFF
 #define I32_MAX 0x7FFFFFFF
 #define I64_MAX 0x7FFFFFFFFFFFFFFF
-#define I8_MIN -I8_MAX-1
-#define I16_MIN -I16_MAX-1
-#define I32_MIN -I32_MAX-1
-#define I64_MIN -I64_MAX-1
+#define I8_MIN (-I8_MAX-1)
+#define I16_MIN (-I16_MAX-1)
+#define I32_MIN (-I32_MAX-1)
+#define I64_MIN (-I64_MAX-1)
 
 i32 max_i32(i32 a, i32 max) {
   i32 result = a > max ? a : max;

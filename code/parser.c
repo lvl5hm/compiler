@@ -32,7 +32,7 @@ Token parser_get(Parser *p, i32 offset) {
 }
 
 
-void parser_error(Parser *p, char *fmt, ...) {
+void parser_error(Parser *p, Token t, char *fmt, ...) {
 #define BUF_COUNT 256
   
   va_list args;
@@ -44,7 +44,6 @@ void parser_error(Parser *p, char *fmt, ...) {
   assert(count > 0 && count <= BUF_COUNT);
   
   
-  Token t = parser_get(p, 0);
   String line_str = get_line_from_index(p->src, (u32)(t.value.data - p->src.data));
   char *line = to_c_string(p->arena, line_str);
   
@@ -116,7 +115,7 @@ Token parser_expect(Parser *p, Token_Kind kind) {
     Token t = parser_get(p, 0);
     char *expected = Token_Kind_To_String[kind].data;
     char *got = to_c_string(p->arena, t.value);
-    parser_error(p, "Expected token \"%s\", got \"%s\" ", expected, got);
+    parser_error(p, t, "Expected token \"%s\", got \"%s\" ", expected, got);
     p->i++;
   }
   return result;
@@ -128,9 +127,17 @@ Code_Type *parse_type(Parser *p);
 Code_Stmt_Decl *parse_decl(Parser *p);
 Code_Stmt_Block *parse_stmt_block(Parser *p);
 
+void set_begin_end(void *nd, i32 begin, i32 end) {
+  if (nd) {
+    Code_Node *node = (Code_Node *)nd;
+    node->first_token = begin;
+    node->last_token = end;
+  }
+}
 
 Code_Type_Func *parse_type_func(Parser *p) {
   Code_Type_Func *result = 0;
+  i32 begin = p->i;
   parser_expect(p, T_FUNC);
   parser_expect(p, T_LPAREN);
   
@@ -151,13 +158,17 @@ Code_Type_Func *parse_type_func(Parser *p) {
   }
   
   result = code_type_func(p, params, return_type);
+  set_begin_end(result, begin, p->i-1);
+  
   return result;
 }
 
 Code_Type *parse_type(Parser *p) {
   Code_Type *result = 0;
+  i32 begin = p->i;
+  
   if (parser_accept(p, T_NAME)) {
-    String name = parser_prev(p).value;
+    String name = parser_get(p, -1).value;
     result = (Code_Type *)code_type_alias(p, name);
   } else if (parser_accept(p, T_REF)) {
     Code_Type *base = parse_type(p);
@@ -196,10 +207,13 @@ Code_Type *parse_type(Parser *p) {
     result = (Code_Type *)parse_type(p);
     parser_expect(p, T_RPAREN);
   }
+  
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Stmt_Decl *parse_stmt_decl(Parser *p, b32 expect_semi) {
+  i32 begin = p->i;
   Code_Stmt_Decl *decl = parse_decl(p);
   
   if (expect_semi) {
@@ -216,11 +230,14 @@ Code_Stmt_Decl *parse_stmt_decl(Parser *p, b32 expect_semi) {
     }
   }
   
+  set_begin_end(decl, begin, p->i);
   return decl;
 }
 
 Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
   Code_Stmt *result = 0;
+  i32 begin = p->i;
+  
   if (parser_peek(p, 0, T_NAME) && parser_peek(p, 1, T_COLON)) {
     result = (Code_Stmt *)parse_stmt_decl(p, expect_semi);
   } else if (parser_accept(p, T_IF)) {
@@ -242,7 +259,7 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
       
       Code_Expr *it_name = (Code_Expr *)code_expr_name(p, const_string("it"));
       Code_Expr *cond = (Code_Expr *)code_expr_binary(p, it_name, T_LESS, max);
-      Code_Stmt *post = (Code_Stmt *)code_stmt_assign(p, it_name, T_ADD_ASSIGN, (Code_Expr *)code_expr_int(p, 1, Int_Kind_i8));
+      Code_Stmt *post = (Code_Stmt *)code_stmt_assign(p, it_name, T_ADD_ASSIGN, (Code_Expr *)code_expr_int(p, 1, 7));
       
       Code_Stmt *body = parse_stmt(p, true);
       result = (Code_Stmt *)code_stmt_for(p, init, cond, post, body);
@@ -289,11 +306,13 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
     }
   }
   
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_atom(Parser *p) {
   Code_Expr *result = 0;
+  i32 begin = p->i;
   
   if (parser_accept(p, T_LPAREN)) {
     Code_Expr *inner = parse_expr(p);
@@ -305,26 +324,26 @@ Code_Expr *parse_expr_atom(Parser *p) {
   } else if (parser_accept(p, T_INT)) {
     u64 value = string_to_u64(parser_prev(p).value);
     
-    Int_Kind kind = Int_Kind_u64;
+    i32 size = 0;
     if (value <= I8_MAX) {
-      kind = Int_Kind_i8;
+      size = 7;
     } else if (value <= U8_MAX) {
-      kind = Int_Kind_u8;
+      size = 8;
     } else if (value <= I16_MAX) {
-      kind = Int_Kind_i16;
+      size = 15;
     } else if (value <= U16_MAX) {
-      kind = Int_Kind_u16;
+      size = 16;
     } else if (value <= I32_MAX) {
-      kind = Int_Kind_i32;
+      size = 31;
     } else if (value <= U32_MAX) {
-      kind = Int_Kind_u32;
+      size = 32;
     } else if (value <= I64_MAX) {
-      kind = Int_Kind_i64;
+      size = 63;
     }  else {
-      kind = Int_Kind_u64;
+      size = 64;
     }
     
-    result = (Code_Expr *)code_expr_int(p, value, kind);
+    result = (Code_Expr *)code_expr_int(p, value, size);
   } else if (parser_accept(p, T_FLOAT)) {
     f64 value = string_to_f64(parser_prev(p).value);
     result = (Code_Expr *)code_expr_float(p, value);
@@ -338,11 +357,14 @@ Code_Expr *parse_expr_atom(Parser *p) {
   } else {
     result = (Code_Expr *)parse_type(p);
   }
+  
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_call(Parser *p) {
   Code_Expr *result = 0;
+  i32 begin = p->i;
   
   result = parse_expr_atom(p);
   while (true) {
@@ -368,11 +390,15 @@ Code_Expr *parse_expr_call(Parser *p) {
       break;
     }
   }
+  
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_unary(Parser *p) {
   Code_Expr *result = 0;
+  i32 begin = p->i;
+  
   if (parser_accept(p, T_SUB) ||
       parser_accept(p, T_NOT) ||
       parser_accept(p, T_BIT_NOT) ||
@@ -384,61 +410,73 @@ Code_Expr *parse_expr_unary(Parser *p) {
   } else {
     result = parse_expr_call(p);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_mul(Parser *p) {
+  i32 begin = p->i;
   Code_Expr *result = parse_expr_unary(p);
   if (parser_accept_range(p, T_STAR_FIRST, T_STAR_LAST)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *right = parse_expr_mul(p);
     result = (Code_Expr *)code_expr_binary(p, result, op, right);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_plus(Parser *p) {
+  i32 begin = p->i;
   Code_Expr *result = parse_expr_mul(p);
   if (parser_accept_range(p, T_PLUS_FIRST, T_PLUS_LAST)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *right = parse_expr_plus(p);
     result = (Code_Expr *)code_expr_binary(p, result, op, right);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_comp(Parser *p) {
+  i32 begin = p->i;
   Code_Expr *result = parse_expr_plus(p);
   if (parser_accept_range(p, T_COMP_FIRST, T_COMP_LAST)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *right = parse_expr_comp(p);
     result = (Code_Expr *)code_expr_binary(p, result, op, right);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr_and(Parser *p) {
+  i32 begin = p->i;
   Code_Expr *result = parse_expr_comp(p);
   if (parser_accept(p, T_AND)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *right = parse_expr_and(p);
     result = (Code_Expr *)code_expr_binary(p, result, op, right);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Expr *parse_expr(Parser *p) {
+  i32 begin = p->i;
   Code_Expr *result = parse_expr_and(p);
   if (parser_accept(p, T_OR)) {
     Token_Kind op = parser_prev(p).kind;
     Code_Expr *right = parse_expr(p);
     result = (Code_Expr *)code_expr_binary(p, result, op, right);
   }
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 Code_Stmt_Block *parse_stmt_block(Parser *p) {
   Code_Stmt_Block *result = 0;
+  i32 begin = p->i;
   parser_expect(p, T_LCURLY);
   Code_Stmt **statements = sb_new(p->arena, Code_Stmt *, 32);
   while (!parser_accept(p, T_RCURLY)) {
@@ -446,11 +484,13 @@ Code_Stmt_Block *parse_stmt_block(Parser *p) {
     sb_push(statements, st);
   }
   result = code_stmt_block(p, statements);
+  set_begin_end(result, begin, p->i-1);
   return result;
 }
 
 
 Code_Stmt_Decl *parse_decl(Parser *p) {
+  i32 begin = p->i;
   Code_Stmt_Decl *result = 0;
   Token t_name = parser_expect(p, T_NAME);
   parser_expect(p, T_COLON);
@@ -486,6 +526,7 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
     }
   }
   result = code_stmt_decl(p, name, type, value, is_const);
+  set_begin_end(result, begin, p->i-1);
   
   return result;
 }
