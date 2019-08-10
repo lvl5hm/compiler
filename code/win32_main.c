@@ -1,45 +1,22 @@
 #include "typechecker.c"
 
 /*
-        // it would be cool to check if param type is unsigned, then
-        // check if arg >= 0 and wrap it into implicit cast.
-        // should also check arg for size and implicit cast it
-        // if it fits
-        
-        // automatically convert ints to floats
-        // TODO(lvl5): also need to think about parsing, how do you decide
-        // that the storage value needs to be u64 or i64?
-        // TODO(lvl5): add a null pointer value
-        // TODO(lvl5): make a function like
-        // Code_Expr *maybe_implicit_cast(expr, type)
-        // that maybe wraps the expression into implicit cast
-        // possibly have special implicit casts inside if statements
-        // like pointer to bool
-        // TODO(lvl5): implicit cast to *void
-        // TODO(lvl5): implicit cast int and float expressions
-        
-        
-        [ ] automatically cast int and float literals if type of declaration is specified
-        [ ] detect if int literal overflows type / is unsigned 
-[ ] automatically cast to *void
- [ ] disallow pointer arithmetic on *void
-[ ] defer
-[ ] functions should be emitted as pointers except for constant declarations
-[ ] sizeof
+TODO:
 [ ] error reporting in the typechecker
-[ ] compile an actual executable
 [ ] redefinition should be an error
+[ ] compile an actual executable
+[ ] O2 breaks the emitting for some reason
+[ ] sizeof
 
 [ ] fixed length arrays
 [ ] dynamic arrays
 [ ] array views
 
+[ ] functions should be emitted as pointers except for constant declarations
 [ ] decide what casts are allowed
 [ ] lvalues, rvalues, assignment, referencing and dereferencing
-[ ] if else block formatting
 [ ] typedefs and functions inside functions
 [ ] better for loop
--iterate int ranges
 -iterate arrays
 -iterate enums
 [ ] while loop
@@ -47,7 +24,7 @@
 [ ] static struct members (enum names are essentially static members already)
 [ ] initializers for structs
 [ ] default parameters for funcs
-[ ] allow omitting names in functions without bodies/typedefs??
+[ ] allow omitting type names in functions without bodies/typedefs??
 [ ] some kind of short syntax for functions when type already has an alias (what do you do with typedefs that omit param names?)
 
 [ ] implicit conversions
@@ -545,13 +522,8 @@ int main() {
   builtin_i16 = add_default_type(p, global_scope, const_string("i16"));
   builtin_i32 = add_default_type(p, global_scope, const_string("i32"));
   builtin_i64 = add_default_type(p, global_scope, const_string("i64"));
-  
-  add_default_type(p, global_scope, const_string("b8"));
-  add_default_type(p, global_scope, const_string("b32"));
-  add_default_type(p, global_scope, const_string("byte"));
-  add_default_type(p, global_scope, const_string("char"));
   builtin_f32 = add_default_type(p, global_scope, const_string("f32"));
-  add_default_type(p, global_scope, const_string("f64"));
+  builtin_f64 = add_default_type(p, global_scope, const_string("f64"));
   builtin_void = add_default_type(p, global_scope, const_string("void"));
   builtin_voidptr = (Code_Type *)code_type_pointer(p, builtin_void);
   

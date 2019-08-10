@@ -19,6 +19,7 @@ typedef struct {
 typedef struct Scope Scope;
 struct Scope {
   Scope_Entry *entries;
+  Code_Stmt **deferred_statements;
   Scope *parent;
 };
 
@@ -216,7 +217,6 @@ typedef struct {
 struct Code_Stmt_Block {
   Code_Stmt **statements;
   Scope *scope;
-  Code_Stmt **deferred_statements;
 };
 
 typedef enum {

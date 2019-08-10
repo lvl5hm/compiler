@@ -13,6 +13,8 @@ Code_Type *builtin_u32 = 0;
 Code_Type *builtin_u64 = 0;
 
 Code_Type *builtin_f32 = 0;
+Code_Type *builtin_f64 = 0;
+
 Code_Type *builtin_void = 0;
 Code_Type *builtin_voidptr = 0;
 
@@ -47,6 +49,8 @@ typedef struct {
 
 Scope *alloc_scope(Arena *arena, Scope *parent) {
   Scope *result = arena_push_struct(arena, Scope);
+  Scope zero_scope = {0};
+  *result = zero_scope;
   result->entries = sb_new(arena, Scope_Entry, 32);
   result->parent = parent;
   return result;
@@ -82,7 +86,7 @@ Scope_Entry *scope_add(Scope *scope, Code_Stmt_Decl *decl) {
 
 Scope *get_global_scope(Scope *child) {
   Scope *result = child;
-  while (result->parent) result = child->parent;
+  while (result->parent) result = result->parent;
   return result;
 }
 
@@ -266,6 +270,51 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
   return result;
 }
 
+void append_deferred_statements(Resolver res, Scope *scope, Code_Stmt *stmt_insert_before, Scope *max_scope) {
+  if (res.current_block) {
+    while (scope) {
+      if (scope->deferred_statements) {
+        u32 deferred_count = sb_count(scope->deferred_statements);
+        u32 all_count = sb_count(res.current_block->statements);
+        if (deferred_count) {
+          for (u32 i = 0; i < deferred_count; i++) 
+            sb_push(res.current_block->statements, null);
+          
+          // TODO(lvl5): if foo return
+          // needs to add a block around return
+          // should all ifs have an implicit block?
+          
+          b32 self_index = all_count;
+          
+          if (stmt_insert_before) {
+            // NOTE(lvl5): if stmt_insert_before is specified, we need
+            // to find it's index and move it and all statements after
+            // it
+            self_index = -1;
+            for (u32 i = 0; i < all_count; i++) {
+              Code_Stmt *item = res.current_block->statements[i];
+              if (item == stmt_insert_before) {
+                self_index = i;
+              }
+              if (self_index != -1) {
+                res.current_block->statements[i+deferred_count] = item;
+              }
+            }
+          }
+          for (u32 i = 0; i < deferred_count; i++) {
+            res.current_block->statements[self_index+i] = scope->deferred_statements[deferred_count-i-1];
+          }
+        }
+      }
+      
+      if (scope == max_scope) {
+        break;
+      }
+      scope = scope->parent;
+    }
+  }
+}
+
 void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
   switch (stmt->kind) {
     case Stmt_Kind_DECL: {
@@ -314,37 +363,7 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
           stmt->keyword.stmt->expr.expr = maybe_implicit_cast(res, stmt->keyword.stmt->expr.expr, res.current_func->type->return_type);
           check_types(res, stmt->keyword.stmt->expr.expr->type, res.current_func->type->return_type);
           
-          if (res.current_block &&
-              res.current_block->deferred_statements) {
-            u32 deferred_count = sb_count(res.current_block->deferred_statements);
-            u32 all_count = sb_count(res.current_block->statements);
-            if (deferred_count) {
-              for (u32 i = 0; i < deferred_count; i++) 
-                sb_push(res.current_block->statements, null);
-              
-              // TODO(lvl5): if foo return
-              // needs to add a block around return
-              // should all ifs have an implicit block?
-              
-              // if you return inside of a block, it should gather all defers of the parent function still
-              
-              // should it only gather defers that were declared before the return?
-              
-              b32 self_index = -1;
-              for (u32 i = 0; i < all_count; i++) {
-                Code_Stmt *item = res.current_block->statements[i];
-                if (item == stmt) {
-                  self_index = i;
-                }
-                if (self_index != -1) {
-                  res.current_block->statements[i+deferred_count] = item;
-                }
-              }
-              for (u32 i = 0; i < deferred_count; i++) {
-                res.current_block->statements[self_index+i] = res.current_block->deferred_statements[deferred_count-i-1];
-              }
-            }
-          }
+          append_deferred_statements(res, scope, stmt, res.current_block->scope);
         } break;
         
         case T_PUSH_CONTEXT: {
@@ -355,13 +374,11 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
         } break;
         
         case T_DEFER: {
-          // TODO(lvl5): defers should be in reverse order
-          // TODO(lvl5): defers should execute before every return
           resolve_stmt(res, scope, stmt->keyword.stmt);
-          if (!res.current_block->deferred_statements) {
-            res.current_block->deferred_statements = sb_new(res.arena, Code_Stmt *, 4);
+          if (!scope->deferred_statements) {
+            scope->deferred_statements = sb_new(res.arena, Code_Stmt *, 4);
           }
-          sb_push(res.current_block->deferred_statements, stmt->keyword.stmt);
+          sb_push(scope->deferred_statements, stmt->keyword.stmt);
         } break;
         
         default: assert(false);
@@ -383,8 +400,11 @@ void resolve_stmt_block(Resolver res, Scope *scope, Code_Stmt_Block *block, b32 
   u32 count = sb_count(block->statements);
   for (u32 i = 0; i < count; i++) {
     Code_Stmt *stmt = block->statements[i];
-    resolve_stmt(child_res, scope, stmt);
+    resolve_stmt(child_res, child_scope, stmt);
   }
+  
+  // TODO(lvl5): if we ever do analysis and we are sure that all codepaths return a value, we can get rid of defers at the end of the function
+  append_deferred_statements(child_res, child_scope, null, child_scope);
 }
 
 Code_Type *get_builtin_type(Scope *scope, String name) {

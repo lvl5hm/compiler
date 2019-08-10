@@ -146,6 +146,9 @@ Code_Type_Func *parse_type_func(Parser *p) {
   }
   
   Code_Type *return_type = parse_type(p);
+  if (!return_type) {
+    return_type = (Code_Type *)code_type_alias(p, const_string("void"));
+  }
   
   result = code_type_func(p, params, return_type);
   return result;
