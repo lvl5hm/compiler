@@ -389,8 +389,10 @@ void builder_write(String_Builder *builder, String str) {
     builder->cur->data[builder->count_in_block++] = str.data[i];
     if (builder->count_in_block == STRING_BUILDER_BLOCK_MAX) {
       String_Builder_Block *next = arena_push_struct(builder->arena, String_Builder_Block);
+      next->next = 0;
       builder->cur->next = next;
       builder->cur = next;
+      builder->count_in_block = 0;
     }
   }
 }

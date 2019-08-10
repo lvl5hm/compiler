@@ -1,10 +1,11 @@
 #include "c_emitter.c"
+#include "time.h"
 
 /*
 TODO:
 [ ] redefinition should be an error
-[ ] O2 breaks the emitting for some reason
 
+[ ] import external c functions
 [ ] fixed length arrays
 [ ] dynamic arrays
 [ ] array views
@@ -85,6 +86,8 @@ void builder_to_file(String file_name, String_Builder *builder) {
   for (String_Builder_Block *block = &builder->first; block; block = block->next) {
     u64 size = block == builder->cur ? builder->count_in_block : STRING_BUILDER_BLOCK_MAX;
     fwrite(block->data, size, 1, file);
+    
+    int foo = 43;
   }
   fclose(file);
 }
@@ -110,6 +113,8 @@ Code_Type *add_default_type(Parser *p, Scope *global_scope, String name) {
 }
 
 int main() {
+  clock_t front_start = clock();
+  
   Arena _arena;
   Arena *arena = &_arena;
   arena_init(arena, malloc(megabytes(10)), megabytes(10));
@@ -134,7 +139,7 @@ int main() {
   
   
   
-  Buffer file = read_entire_file(arena, const_string("test.lang"));
+  Buffer file = read_entire_file(arena, const_string("code\\test.lang"));
   file.data[file.size++] = 0;
   String src = make_string((char *)file.data, (u32)file.size);
   Token *tokens = tokenize(arena, src);
@@ -163,7 +168,7 @@ int main() {
   builtin_f64 = add_default_type(p, global_scope, const_string("f64"));
   builtin_void = add_default_type(p, global_scope, const_string("void"));
   builtin_voidptr = (Code_Type *)code_type_pointer(p, builtin_void);
-  scope_add(global_scope, code_stmt_decl(p, const_string("char"), builtin_Type, (Code_Node *)builtin_u8, true));
+  scope_add(global_scope, code_stmt_decl(p, const_string("char"), builtin_Type, (Code_Node *)builtin_i8, true));
   
   
   Parse_Result parse_result = parse(p, src, tokens);
@@ -183,6 +188,7 @@ int main() {
     
     // NOTE(lvl5): c header
     emit_string(&emitter, const_string(
+      "#define NULL 0\n"
       "typedef char i8;\n"
       "typedef short i16;\n"
       "typedef int i32;\n"
@@ -196,22 +202,41 @@ int main() {
     
     resolve_decls(res, parse_result, global_scope);
     
+    emit_string(&emitter, const_string(
+      "int main() {\n"
+      "  Context dummy = {0};\n"
+      "  __entry(dummy);\n"
+      "}\n"
+      ));
+    
     if (sb_count(p->errors) == 0) {
-      builder_to_file(const_string("out.c"), emitter.builder);
+      builder_to_file(const_string("code\\out.c"), emitter.builder);
     }
   }
   
   if (sb_count(p->errors)) {
-    getchar();
+    
   } else {
     char compiler_flags[] = "-Od -MTd -nologo -Oi -GR- -EHa- -WX -W4 -wd4101 -wd4702 -wd4005 -wd4505 -wd4456 -wd4201 -wd4100 -wd4189 -wd4204 -wd4459 -Zi -FC -I\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.21.27702\\include\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.17763.0\\ucrt\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.17763.0\\um\" -I\"C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.17763.0\\shared\"";
     
     char linker_flags[] = "-incremental:no -opt:ref OpenGL32.lib Winmm.lib user32.lib Gdi32.lib /LIBPATH:\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.21.27702\\lib\\x64\" /LIBPATH:\"C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.17763.0\\um\\x64\" /LIBPATH:\"C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.17763.0\\ucrt\\x64\"";
     
     char buffer[1024];
-    sprintf_s(buffer, 1024, "cl %s out.c /link %s", compiler_flags, linker_flags);
+    sprintf_s(buffer, 1024, "cl %s code\\out.c /link %s", compiler_flags, linker_flags);
+    
+    clock_t front_end = clock();
+    
+    f64 front_time = (f64)(front_end - front_start)/(f64)(CLOCKS_PER_SEC);
+    printf("front time: %0.3f s\n", front_time);
+    
+    clock_t cl_start = clock();
     system(buffer);
+    
+    clock_t cl_end = clock();
+    f64 cl_time = (f64)(cl_end - cl_start)/(f64)(CLOCKS_PER_SEC);
+    printf("cl time: %0.3f s\n", cl_time);
   }
   
+  getchar();
   return 0;
 }

@@ -102,6 +102,15 @@ Code_Type *get_final_type(Code_Type *type) {
 
 b32 _check_types(Resolver res, Code_Type *a, Code_Type *b, b32 error) {
   b32 result = false;
+  
+#if 0  
+  if (a->kind == b->kind && a->kind == Type_Kind_ALIAS) {
+    if (string_compare(a->alias.name, const_string("char"))) {
+      __debugbreak();
+    }
+  }
+#endif
+  
   a = get_final_type(a);
   b = get_final_type(b);
   
@@ -425,6 +434,17 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
     case Type_Kind_PTR: {
       if (type->pointer.base->kind == Type_Kind_ALIAS) {
         resolve_name(res, scope, type->pointer.base->alias.name, Resolve_State_PARTIAL);
+        
+        // TODO(lvl5): this is ugly
+        Code_Node *base_node = scope_get(scope, type->pointer.base->alias.name)->decl->value;
+        assert(base_node->kind == Code_Kind_EXPR);
+        assert(base_node->expr.kind == Expr_Kind_TYPE);
+        Type_Kind base_kind = base_node->expr.type_e.kind;
+        if (base_kind == Type_Kind_ALIAS ||
+            base_kind == Type_Kind_FUNC ||
+            base_kind == Type_Kind_PTR) {
+          type->pointer.base->alias.base = &base_node->expr.type_e;
+        }
       } else {
         resolve_type(res, scope, type->pointer.base);
       }
@@ -678,8 +698,8 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       expr->type = sig->return_type;
     } break;
     case Expr_Kind_CAST: {
-      resolve_type(res, scope, expr->cast.cast_type);
       RESOLVE_CAST_LABEL:
+      resolve_type(res, scope, expr->cast.cast_type);
       resolve_expr(res, scope, expr->cast.expr);
       
       expr->type = expr->cast.cast_type;
@@ -809,7 +829,10 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
           res.current_func = &decl->value->func;
           Scope *child_scope = res.current_func->scope;
           res.context_arg = (Code_Expr *)code_expr_name(res.parser, const_string("ctx"));
-          resolve_stmt_block(res, child_scope, res.current_func->body, /* is_func_body */ true);
+          
+          if (!res.current_func->foreign) {
+            resolve_stmt_block(res, child_scope, res.current_func->body, /* is_func_body */ true);
+          }
         } break;
         
         default: assert(false);

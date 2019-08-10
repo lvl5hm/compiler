@@ -380,11 +380,16 @@ Token *tokenize(Arena *arena, String src) {
         }
       } break;
       
+      case '#': {
+        skip(1);
+        while (is_digit(*stream) || is_alpha(*stream)) eat();
+        end(T_POUND);
+      } break;
+      
       case1('\\', T_BACKSLASH);
       case1('\'', T_SINGLE_QUOTE);
       case1(',', T_COMMA);
       case1(';', T_SEMI);
-      case1('#', T_POUND);
       case1('(', T_LPAREN);
       case1(')', T_RPAREN);
       case1('[', T_LBRACKET);

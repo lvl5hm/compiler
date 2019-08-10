@@ -320,6 +320,9 @@ Code_Expr *parse_expr_atom(Parser *p) {
     result = inner;
   } else if (parser_accept(p, T_NAME)) {
     String name = parser_prev(p).value;
+    if (string_compare(name, const_string("main"))) {
+      name = const_string("__main");
+    }
     result = (Code_Expr *)code_expr_name(p, name);
   } else if (parser_accept(p, T_INT)) {
     u64 value = string_to_u64(parser_prev(p).value);
@@ -496,6 +499,9 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
   parser_expect(p, T_COLON);
   
   String name = t_name.value;
+  if (string_compare(name, const_string("main"))) {
+    name = const_string("__main");
+  }
   
   Code_Type *type = 0;
   Code_Node *value = 0;
@@ -517,7 +523,15 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
       Code_Type_Func *sig = parse_type_func(p);
       if (parser_peek(p, 0, T_LCURLY)) {
         Code_Stmt_Block *body = parse_stmt_block(p);
-        value = (Code_Node *)code_func(p, sig, body);
+        value = (Code_Node *)code_func(p, sig, body, false);
+      } else if (parser_accept(p, T_POUND)) {
+        Token t = parser_get(p, -1);
+        if (string_compare(t.value, const_string("foreign"))) {
+          value = (Code_Node *)code_func(p, sig, null, true);
+          parser_expect(p, T_SEMI);
+        } else {
+          assert(false);
+        }
       } else {
         value = (Code_Node *)sig;
       }

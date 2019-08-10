@@ -175,7 +175,9 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
           emit_expr(e, expr->binary.right);
         } break;
         case T_SUBSCRIPT: {
+          emit_string(e, const_string("("));
           emit_expr(e, expr->binary.left);
+          emit_string(e, const_string(")"));
           emit_string(e, const_string("["));
           emit_expr(e, expr->binary.right);
           emit_string(e, const_string("]"));
@@ -342,6 +344,12 @@ void emit_decl_full(Emitter *e, Code_Stmt_Decl *decl) {
     emit_type_postfix(e, type);
     e->enum_name = (String){0};
   } else {
+    if (decl->value && decl->value->kind == Code_Kind_FUNC) {
+      if (decl->value->func.foreign) {
+        emit_string(e, const_string("extern "));
+      }
+    }
+    
     emit_type_prefix(e, decl->type);
     emit_string(e, const_string(" "));
     emit_string(e, decl->name);
@@ -352,8 +360,12 @@ void emit_decl_full(Emitter *e, Code_Stmt_Decl *decl) {
         emit_string(e, const_string(" = "));
         emit_expr(e, (Code_Expr *)decl->value);
       } else if (decl->value->kind == Code_Kind_FUNC) {
-        emit_string(e, const_string(" "));
-        emit_stmt_block(e, decl->value->func.body);
+        if (decl->value->func.foreign) {
+          emit_string(e, const_string(";"));
+        } else {
+          emit_string(e, const_string(" "));
+          emit_stmt_block(e, decl->value->func.body);
+        }
       }
     }
   }
@@ -369,6 +381,7 @@ void emit_decl(Emitter *e, Code_Stmt_Decl *decl, Resolve_State need_state) {
         emit_type_postfix(e, decl->type);
         
         emit_string(e, const_string(";"));
+        decl->emit_state = Resolve_State_PARTIAL;
       } else if (decl->type == builtin_Type &&
                  decl->value->expr.type_e.kind == Type_Kind_STRUCT) {
         emit_string(e, const_string("typedef struct "));

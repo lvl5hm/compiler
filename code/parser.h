@@ -165,6 +165,7 @@ struct Code_Expr {
 typedef struct {
   Code_Type_Func *type;
   Code_Stmt_Block *body;
+  b32 foreign;
   Scope *scope;
 } Code_Func;
 
@@ -369,10 +370,11 @@ Code_Type_Alias *code_type_alias(Parser *p, String alias) {
   return (Code_Type_Alias *)node;
 }
 
-Code_Func *code_func(Parser *p, Code_Type_Func *sig, Code_Stmt_Block *body) {
+Code_Func *code_func(Parser *p, Code_Type_Func *sig, Code_Stmt_Block *body, b32 foreign) {
   Code_Node *node = code_node(p, Code_Kind_FUNC);
   node->func.type = sig;
   node->func.body = body;
+  node->func.foreign = foreign;
   return (Code_Func *)node;
 }
 
