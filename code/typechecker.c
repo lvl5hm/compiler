@@ -18,23 +18,30 @@ Code_Type *builtin_f64 = 0;
 Code_Type *builtin_void = 0;
 Code_Type *builtin_voidptr = 0;
 
+#define ADD_CTX_PARAM false
+
 
 char *tcstring(String str) {
   char *result = to_c_string(scratch_arena, str);
   return result;
 }
 
-typedef struct Emitter Emitter;
+typedef struct C_Emitter C_Emitter;
+typedef struct Bc_Emitter Bc_Emitter;
 
 typedef struct {
   Code_Stmt_Decl **top_decls;
-  Emitter *emitter;
-  Arena *arena;
-  Code_Stmt_Decl *decl;
   Parser *parser;
+  i32 stack_position;
+  i32 bss_position;
+  C_Emitter *c_emitter;
+  Bc_Emitter *bc_emitter;
+} Resolver_Common;
+
+typedef struct {
+  Resolver_Common *common;
   Code_Func *current_func;
   Code_Stmt_Block *current_block;
-  
   b32 is_inside_func_typedef;
   Code_Expr *context_arg;
 } Resolver;
@@ -93,7 +100,12 @@ Scope *get_global_scope(Scope *child) {
 
 Code_Type *get_final_type(Code_Type *type) {
   Code_Type *result = type;
-  while (result->kind == Type_Kind_ALIAS && result->alias.base) {
+  while (result->kind == Type_Kind_ALIAS && result->alias.base &&
+         (result->alias.base->kind == Type_Kind_ALIAS ||
+          result->alias.base->kind == Type_Kind_FUNC ||
+          result->alias.base->kind == Type_Kind_ENUM ||
+          result->alias.base->kind == Type_Kind_INT ||
+          result->alias.base->kind == Type_Kind_FLOAT)) {
     // TODO(lvl5): there can be problems with scopes and type alias shadowing
     result = result->alias.base;
   }
@@ -117,6 +129,13 @@ b32 _check_types(Resolver res, Code_Type *a, Code_Type *b, b32 error) {
   
   if (a->kind == b->kind) {
     switch (a->kind) {
+      case Type_Kind_INT: {
+        result = a->int_t.size == b->int_t.size && 
+          a->int_t.is_signed == b->int_t.is_signed;
+      } break;
+      case Type_Kind_FLOAT: {
+        result = a->float_t.size == b->float_t.size;
+      } break;
       case Type_Kind_STRUCT: {
         result = false;
       } break;
@@ -161,14 +180,14 @@ b32 check_types(Resolver res, Code_Type *a, Code_Type *b) {
   b32 result = _check_types(res, a, b, true);
   if (!result) {
     Code_Node *node = (Code_Node *)a;
-    Token first_token = res.parser->tokens[node->first_token];
-    Token last_token = res.parser->tokens[node->last_token];
+    Token first_token = res.common->parser->tokens[node->first_token];
+    Token last_token = res.common->parser->tokens[node->last_token];
     i64 count = last_token.value.data - first_token.value.data + last_token.value.count;
     
     char *first_type_str = tcstring(substring(first_token.value, 0, (u32)count));
     char *second_type_str = "test test";
     //tcstring(substring(first_token.value, 0, (u32)count));
-    parser_error(res.parser, first_token, "types '%s' and '%s' are incompatible;",
+    parser_error(res.common->parser, first_token, "types '%s' and '%s' are incompatible;",
                  first_type_str, second_type_str);
   }
   return result;
@@ -259,7 +278,7 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
   }
   
   if (allow_cast) {
-    result = (Code_Expr *)code_expr_cast(res.parser, to, expr, true);
+    result = (Code_Expr *)code_expr_cast(res.common->parser, to, expr, true);
     result->type = to;
   }
   return result;
@@ -310,10 +329,32 @@ void append_deferred_statements(Resolver res, Scope *scope, Code_Stmt *stmt_inse
   }
 }
 
+i32 get_size_of_type(Code_Type *type) {
+  while (type->kind == Type_Kind_ALIAS && type->alias.base) {
+    type= type->alias.base;
+  }
+  
+  i32 result = 0;
+  if (type->kind == Type_Kind_STRUCT) {
+    result = type->struct_t.size;
+  } else if (type->kind == Type_Kind_INT) {
+    result = type->int_t.size;
+  } else if (type->kind == Type_Kind_FLOAT) {
+    result = type->float_t.size;
+  }
+  return result;;
+}
+
 void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
   switch (stmt->kind) {
     case Stmt_Kind_DECL: {
       resolve_decl_full(res, scope, &stmt->decl);
+      Code_Stmt_Decl *decl = &stmt->decl;
+      decl->is_global = false;
+      decl->offset = res.common->stack_position;
+      
+      i32 size = get_size_of_type(decl->type);
+      res.common->stack_position += size;
     } break;
     case Stmt_Kind_ASSIGN: {
       resolve_expr(res, scope, stmt->assign.left);
@@ -371,7 +412,7 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
         case T_DEFER: {
           resolve_stmt(res, scope, stmt->keyword.stmt);
           if (!scope->deferred_statements) {
-            scope->deferred_statements = sb_new(res.arena, Code_Stmt *, 4);
+            scope->deferred_statements = sb_new(res.common->parser->arena, Code_Stmt *, 4);
           }
           sb_push(scope->deferred_statements, stmt->keyword.stmt);
         } break;
@@ -387,7 +428,7 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
 void resolve_stmt_block(Resolver res, Scope *scope, Code_Stmt_Block *block, b32 is_func_body) {
   Scope *child_scope = scope;
   if (!is_func_body) {
-    child_scope = alloc_scope(res.arena, scope);
+    child_scope = alloc_scope(res.common->parser->arena, scope);
   }
   Resolver child_res = res;
   child_res.current_block = block;
@@ -410,20 +451,20 @@ Code_Type *get_builtin_type(Scope *scope, String name) {
 void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
   switch (type->kind) {
     case Type_Kind_ENUM: {
-      Scope *child_scope = alloc_scope(res.arena, scope);
+      Scope *child_scope = alloc_scope(res.common->parser->arena, scope);
       type->enum_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
         String member = type->enum_t.members[i];
         // TODO(lvl5): specify enum types
         scope_add(child_scope,
-                  code_stmt_decl(res.parser, member, builtin_i32,
-                                 (Code_Node *)code_expr_int(res.parser, i, 31), true));
+                  code_stmt_decl(res.common->parser, member, builtin_i32,
+                                 (Code_Node *)code_expr_int(res.common->parser, i, 31), true));
       }
       type->enum_t.item_type = builtin_i32;
     } break;
     
     case Type_Kind_STRUCT: {
-      Scope *child_scope = alloc_scope(res.arena, scope);
+      Scope *child_scope = alloc_scope(res.common->parser->arena, scope);
       type->struct_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->struct_t.members); i++) {
         Code_Stmt_Decl *member = type->struct_t.members[i];
@@ -440,11 +481,7 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
         assert(base_node->kind == Code_Kind_EXPR);
         assert(base_node->expr.kind == Expr_Kind_TYPE);
         Type_Kind base_kind = base_node->expr.type_e.kind;
-        if (base_kind == Type_Kind_ALIAS ||
-            base_kind == Type_Kind_FUNC ||
-            base_kind == Type_Kind_PTR) {
-          type->pointer.base->alias.base = &base_node->expr.type_e;
-        }
+        type->pointer.base->alias.base = &base_node->expr.type_e;
       } else {
         resolve_type(res, scope, type->pointer.base);
       }
@@ -460,11 +497,7 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
       assert(base_node->kind == Code_Kind_EXPR);
       assert(base_node->expr.kind == Expr_Kind_TYPE);
       Type_Kind base_kind = base_node->expr.type_e.kind;
-      if (base_kind == Type_Kind_ALIAS ||
-          base_kind == Type_Kind_FUNC ||
-          base_kind == Type_Kind_PTR) {
-        type->alias.base = &base_node->expr.type_e;
-      }
+      type->alias.base = &base_node->expr.type_e;
     } break;
     
     case Type_Kind_ARRAY: {
@@ -472,7 +505,10 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
     } break;
     
     case Type_Kind_FUNC: {
-      sb_push(type->func.params, code_stmt_decl(res.parser, const_string("ctx"), (Code_Type *)code_type_alias(res.parser, const_string("Context")), 0, false));
+      
+#if ADD_CTX_PARAM
+      sb_push(type->func.params, code_stmt_decl(res.common->parser, const_string("ctx"), (Code_Type *)code_type_alias(res.common->parser, const_string("Context")), 0, false));
+#endif
       
       resolve_type(res, scope, type->func.return_type);
       for (u32 i = 0; i < sb_count(type->func.params); i++) {
@@ -515,7 +551,7 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
             expr->type = builtin_Type;
           } else {
             expr->type = 
-              (Code_Type *)code_type_pointer(res.parser, expr->unary.val->type);
+              (Code_Type *)code_type_pointer(res.common->parser, expr->unary.val->type);
           }
         } break;
         case T_DEREF: {
@@ -604,7 +640,7 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
           }
           assert(member_type);
           check_types(res, member_type, expr->binary.right->type);
-          expr->type = (Code_Type *)code_type_alias(res.parser, enum_alias);
+          expr->type = (Code_Type *)code_type_alias(res.common->parser, enum_alias);
         }
       } else {
         resolve_expr(res, scope, expr->binary.right);
@@ -683,7 +719,9 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       Code_Stmt_Decl **params = sig->params;
       Code_Expr **args = expr->call.args;
       
+#if ADD_CTX_PARAM
       sb_push(args, res.context_arg);
+#endif
       
       assert(sb_count(args) == sb_count(params));
       for (u32 i = 0; i < sb_count(params); i++) {
@@ -732,13 +770,14 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
     } break;
     case Expr_Kind_STRING: {
       resolve_name(res, scope, const_string("string"), Resolve_State_FULL);
-      resolve_name(res, scope, const_string("__string_make"), Resolve_State_FULL);
-      expr->type = (Code_Type *)code_type_alias(res.parser, const_string("string"));
+      resolve_name(res, scope, const_string("__string_const"), Resolve_State_FULL);
+      expr->type = (Code_Type *)code_type_alias(res.common->parser, const_string("string"));
     } break;
     case Expr_Kind_NAME: {
       resolve_name(res, scope, expr->name.name, Resolve_State_FULL);
       
-      expr->type = scope_get(scope, expr->name.name)->decl->type;
+      expr->name.decl = scope_get(scope, expr->name.name)->decl;
+      expr->type = expr->name.decl->type;
       if (expr->type == builtin_Type) {
         String name = expr->name.name;
         expr->kind = Expr_Kind_TYPE;
@@ -786,9 +825,11 @@ void resolve_decl_partial(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
         Code_Func *func = &decl->value->func;
         value_type = (Code_Type *)func->type;
         
-        Scope *child_scope = alloc_scope(res.arena, scope);
+        Scope *child_scope = alloc_scope(res.common->parser->arena, scope);
         func->scope = child_scope;
+        
         resolve_type(res, child_scope, value_type);
+        
         decl->check_state = Resolve_State_PARTIAL;
       } break;
       
@@ -826,13 +867,20 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
         
         case Code_Kind_FUNC: {
           Resolver child_res = res;
-          res.current_func = &decl->value->func;
-          Scope *child_scope = res.current_func->scope;
-          res.context_arg = (Code_Expr *)code_expr_name(res.parser, const_string("ctx"));
           
-          if (!res.current_func->foreign) {
-            resolve_stmt_block(res, child_scope, res.current_func->body, /* is_func_body */ true);
+          child_res.current_func = &decl->value->func;
+          Scope *child_scope = child_res.current_func->scope;
+          
+          child_res.context_arg = (Code_Expr *)code_expr_name(res.common->parser, const_string("ctx"));
+          
+          i32 old_stack_position = res.common->stack_position;
+          child_res.common->stack_position = 0;
+          
+          if (!child_res.current_func->foreign) {
+            resolve_stmt_block(child_res, child_scope, child_res.current_func->body, /* is_func_body */ true);
           }
+          
+          res.common->stack_position = old_stack_position;
         } break;
         
         default: assert(false);
@@ -840,13 +888,17 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
     }
     decl->check_state = Resolve_State_FULL;
   }
+  
+  if (decl->type != builtin_Type) {
+    
+  }
 }
 
-void emit_top_decl(Emitter *, Code_Stmt_Decl *, Resolve_State);
+void bc_emit_decl(Bc_Emitter *, Code_Stmt_Decl *);
+void c_emit_top_decl(C_Emitter *, Code_Stmt_Decl *, Resolve_State);
 void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Resolve_State state) {
   if (decl->check_state < state) {
     Resolver child_res = res;
-    child_res.decl = decl;
     switch (state) {
       case Resolve_State_PARTIAL:
       resolve_decl_partial(res, scope, decl);
@@ -860,21 +912,23 @@ void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Res
     }
   }
   
-  if (sb_count(res.parser->errors) > 0) {
-    for (u32 i = 0; i < sb_count(res.parser->errors); i++) {
-      printf("Type error: %s\n\n", tcstring(res.parser->errors[i]));
+  if (sb_count(res.common->parser->errors) > 0) {
+    for (u32 i = 0; i < sb_count(res.common->parser->errors); i++) {
+      printf("Type error: %s\n\n", tcstring(res.common->parser->errors[i]));
     }
   } else {
-    // emitting business
+    bc_emit_decl(res.common->bc_emitter, decl);
+#if 0
     if (decl->emit_state < state) {
       emit_top_decl(res.emitter, decl, state);
     }
+#endif
   }
 }
 
 void resolve_name(Resolver res, Scope *scope, String name, Resolve_State state) {
-  for (u32 i = 0; i < sb_count(res.top_decls); i++) {
-    Code_Stmt_Decl *decl = res.top_decls[i];
+  for (u32 i = 0; i < sb_count(res.common->top_decls); i++) {
+    Code_Stmt_Decl *decl = res.common->top_decls[i];
     if (string_compare(decl->name, name)) {
       resolve_and_emit_decl(res, get_global_scope(scope), decl, state);
       break;

@@ -1,15 +1,21 @@
-#include "c_emitter.c"
+//#include "c_emitter.c"
+#include "typechecker.c"
+#include "bytecode_emitter.c"
 #include "time.h"
 
 /*
 TODO:
 [ ] redefinition should be an error
+[ ] better typechecker error messages
 
-[ ] import external c functions
+maybe this should come after polymorphism??? probably not, because polymorphism should be hard
 [ ] fixed length arrays
 [ ] dynamic arrays
 [ ] array views
 
+
+[ ] function overloading
+[ ] operator overloading
 [ ] default initialization for all variables
 [ ] sizeof
 [ ] functions should be emitted as pointers except for constant declarations
@@ -19,6 +25,7 @@ TODO:
 [ ] better for loop
 -iterate arrays
 -iterate enums
+-iterate strings
 [ ] while loop
 [ ] enum to string, enum count
 [ ] static struct members (enum names are essentially static members already)
@@ -95,21 +102,8 @@ void builder_to_file(String file_name, String_Builder *builder) {
 void resolve_decls(Resolver res, Parse_Result parsed, Scope *global_scope) {
   for (u32 decl_index = 0; decl_index < sb_count(parsed.decls); decl_index++) {
     Code_Stmt_Decl *decl = parsed.decls[decl_index];
-    res.decl = decl;
     resolve_and_emit_decl(res, global_scope, decl, Resolve_State_FULL);
   }
-}
-
-Code_Type *add_default_type(Parser *p, Scope *global_scope, String name) {
-  Code_Type_Alias *type = code_type_alias(p, name);
-  type->is_builtin = true;
-  
-  Code_Type *type_of_type = string_compare(name, const_string("Type"))
-    ? (Code_Type *)type
-    : builtin_Type;
-  
-  scope_add(global_scope, code_stmt_decl(p, name, type_of_type, (Code_Node *)type, true));
-  return (Code_Type *)type;
 }
 
 int main() {
@@ -120,24 +114,7 @@ int main() {
   arena_init(arena, malloc(megabytes(10)), megabytes(10));
   arena_init(scratch_arena, malloc(megabytes(1)), megabytes(1));
   
-  
-#if 0  
-  builtin_Type = arena_push_struct(arena, Type_Info);
-  builtin_Type->kind = Type_Info_Kind_TYPE;
-  builtin_Type->size = 8;
-  
-  builtin_f32 = arena_push_struct(arena, Type_Info);
-  builtin_f32->kind = Type_Info_Kind_FLOAT;
-  builtin_f32->size = 4;
-  
-  builtin_i32 = arena_push_struct(arena, Type_Info);
-  builtin_i32->kind = Type_Info_Kind_INT;
-  builtin_i32->size = 4;
-  builtin_i32->int_t.is_signed = true;
-#endif
-  
-  
-  
+  bytecode_test(arena);
   
   Buffer file = read_entire_file(arena, const_string("code\\test.lang"));
   file.data[file.size++] = 0;
@@ -154,39 +131,62 @@ int main() {
   
   Scope *global_scope = alloc_scope(arena, null);
   
-  // TODO(lvl5): interning types somehow?
-  builtin_Type = add_default_type(p, global_scope, const_string("Type"));
-  builtin_u8 = add_default_type(p, global_scope, const_string("u8"));
-  builtin_u16 = add_default_type(p, global_scope, const_string("u16"));
-  builtin_u32 = add_default_type(p, global_scope, const_string("u32"));
-  builtin_u64 = add_default_type(p, global_scope, const_string("u64"));
-  builtin_i8 = add_default_type(p, global_scope, const_string("i8"));
-  builtin_i16 = add_default_type(p, global_scope, const_string("i16"));
-  builtin_i32 = add_default_type(p, global_scope, const_string("i32"));
-  builtin_i64 = add_default_type(p, global_scope, const_string("i64"));
-  builtin_f32 = add_default_type(p, global_scope, const_string("f32"));
-  builtin_f64 = add_default_type(p, global_scope, const_string("f64"));
-  builtin_void = add_default_type(p, global_scope, const_string("void"));
+  builtin_Type = (Code_Type *)code_type_alias(p, const_string("Type"));
+  scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type, true));
+  
+  builtin_void = (Code_Type *)code_type_alias(p, const_string("void"));
+  scope_add(global_scope, code_stmt_decl(p, const_string("void"), builtin_Type,
+                                         (Code_Node *)builtin_void, true));
+  
+#define ADD_BUILTIN_INT(name, size, is_signed) \
+  builtin_##name = (Code_Type *)code_type_int(p, size, is_signed); \
+  scope_add(global_scope, code_stmt_decl(p, const_string(#name), builtin_Type, \
+  (Code_Node *)builtin_##name, true));
+  
+  ADD_BUILTIN_INT(u8, 1, false);
+  ADD_BUILTIN_INT(u16, 2, false);
+  ADD_BUILTIN_INT(u32, 4, false);
+  ADD_BUILTIN_INT(u64, 8, false);
+  ADD_BUILTIN_INT(i8, 1, true);
+  ADD_BUILTIN_INT(i16, 2, true);
+  ADD_BUILTIN_INT(i32, 4, true);
+  ADD_BUILTIN_INT(i64, 8, true);
+  
+  
+#define ADD_BUILTIN_FLOAT(name, size) \
+  builtin_##name = (Code_Type *)code_type_float(p, size); \
+  scope_add(global_scope, code_stmt_decl(p, const_string(#name), builtin_Type, \
+  (Code_Node *)builtin_##name, true));
+  ADD_BUILTIN_FLOAT(f32, 32);
+  ADD_BUILTIN_FLOAT(f64, 64);
+  
   builtin_voidptr = (Code_Type *)code_type_pointer(p, builtin_void);
-  scope_add(global_scope, code_stmt_decl(p, const_string("char"), builtin_Type, (Code_Node *)builtin_i8, true));
+  
   
   
   Parse_Result parse_result = parse(p, src, tokens);
   if (parse_result.success) {
+    Resolver_Common common = {0};
     Resolver res = {0};
-    res.top_decls = parse_result.decls;
-    res.arena = arena;
-    res.parser = p;
+    res.common = &common;
+    res.common->top_decls = parse_result.decls;
+    res.common->parser = p;
     
+#if 0    
     Emitter emitter = {0};
     emitter.indent = 0;
     emitter.res = &res;
     emitter.builder = arena_push_struct(arena, String_Builder);
     builder_init(emitter.builder, arena);
-    
     res.emitter = &emitter;
+#endif
+    
+    Bc_Emitter emitter = {0};
+    emitter.instructions = arena_push_array(arena, Bc_Instruction, 2048);
+    res.common->bc_emitter = &emitter;
     
     // NOTE(lvl5): c header
+#if 0
     emit_string(&emitter, const_string(
       "#define NULL 0\n"
       "typedef char i8;\n"
@@ -199,18 +199,24 @@ int main() {
       "typedef unsigned long long u64;\n"
       "\n"
       ));
+#endif
     
     resolve_decls(res, parse_result, global_scope);
     
+#if 0    
     emit_string(&emitter, const_string(
       "int main() {\n"
       "  Context dummy = {0};\n"
       "  __entry(dummy);\n"
       "}\n"
       ));
+#endif
     
     if (sb_count(p->errors) == 0) {
-      builder_to_file(const_string("code\\out.c"), emitter.builder);
+      bytecode_print(&emitter);
+      __debugbreak();
+      //bytecode_run(arena, &emitter);
+      //builder_to_file(const_string("code\\out.c"), emitter.builder);
     }
   }
   

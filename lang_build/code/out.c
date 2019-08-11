@@ -45,11 +45,6 @@ void* alloc(u64 size, Context ctx) {
   return result;
 }
 
-typedef struct {
-  char* data;
-  u64 count;
-} string;
-
 void memory_copy(void* dst, void* src, u64 size, Context ctx) {
   for (u64 i = 0; (i < size); i += 1) {
     ((byte*)(dst))[i] = ((byte*)(src))[i];
@@ -71,6 +66,26 @@ byte* arena_allocator(u64 size, Alloc_Op op, void* allocator_data, void* old_ptr
   return result;
 }
 
+byte* scratch_allocator(u64 size, Alloc_Op op, void* allocator_data, void* old_ptr, u64 old_size, u64 align, Context ctx) {
+  byte* result = arena_allocator(size, op, &(ctx.scratch), old_ptr, old_size, align, ctx);
+  return result;
+}
+
+void scratch_reset(Context ctx) {
+  scratch_allocator(0, Alloc_Op_FREE_ALL, NULL, NULL, 0, 0, ctx);
+}
+
+typedef struct {
+  char* data;
+  u64 count;
+} string;
+
+void memory_zero(void* dst, u64 size, Context ctx) {
+  for (u64 i = 0; (i < size); i += 1) {
+    ((byte*)(dst))[i] = 0;
+  }
+}
+
 extern void* malloc(u64 size, Context ctx);
 
 extern void free(void* ptr, Context ctx);
@@ -81,7 +96,7 @@ byte* system_allocator(u64 size, Alloc_Op op, void* allocator_data, void* old_pt
   byte* result = NULL;
   if ((op == Alloc_Op_ALLOC)) {
     result = (byte*)(malloc(size, ctx));
-  } else if ((op == Alloc_Op_FREE_ALL)) {
+  } else if ((op == Alloc_Op_FREE)) {
     free(old_ptr, ctx);
   } else if ((op == Alloc_Op_REALLOC)) {
     realloc(old_ptr, size, ctx);
@@ -97,7 +112,20 @@ string __string_make(char* data, u64 count, Context ctx) {
   return result;
 }
 
-extern i32 putchar(char c, Context ctx);
+string __string_const(char* data, u64 count, Context ctx) {
+  string result;
+  result.data = data;
+  result.count = count;
+  return result;
+}
+
+Context scratch_ctx(Context ctx) {
+  Context result = ctx;
+  result.allocator = scratch_allocator;
+  return result;
+}
+
+extern i32 putchar(i32 c, Context ctx);
 
 void print_string(string s, Context ctx) {
   for (u64 i = 0; (i < s.count); i += 1) {
@@ -106,11 +134,14 @@ void print_string(string s, Context ctx) {
 }
 
 void __main(Context ctx) {
-  print_string(__string_make("hello world", 11, ctx), ctx);
+  print_string(__string_const("Hello sailor!\n", 15, ctx), ctx);
 }
 
 void __entry(Context ctx) {
   ctx.allocator = system_allocator;
+  u64 scratch_size = (u64)((1024 * 40));
+  void* scratch_memory = alloc(scratch_size, ctx);
+  ctx.scratch = arena_make(scratch_memory, scratch_size, ctx);
   __main(ctx);
 }
 

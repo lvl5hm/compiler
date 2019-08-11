@@ -224,7 +224,7 @@ void emit_expr(Emitter *e, Code_Expr *expr) {
       emit_string(e, f64_to_string(scratch_arena, expr->float_e.value, 10));
     } break;
     case Expr_Kind_STRING: {
-      emit_string(e, const_string("__string_make(\""));
+      emit_string(e, const_string("__string_const(\""));
       emit_string(e, expr->string.value);
       emit_string(e, const_string("\", "));
       emit_string(e, i64_to_string(scratch_arena, expr->string.value.count));

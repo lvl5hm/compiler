@@ -28,6 +28,7 @@ typedef struct {
   Code_Stmt_Decl **members;
   
   Scope *scope;
+  i32 size;
 } Code_Type_Struct;
 
 typedef struct {
@@ -56,6 +57,14 @@ typedef struct {
   b32 is_builtin;
 } Code_Type_Alias;
 
+typedef struct {
+  i32 size;
+  b32 is_signed;
+} Code_Type_Int;
+
+typedef struct {
+  i32 size;
+} Code_Type_Float;
 
 
 typedef enum {
@@ -65,6 +74,8 @@ typedef enum {
   Type_Kind_ARRAY,
   Type_Kind_FUNC,
   Type_Kind_ALIAS,
+  Type_Kind_INT,
+  Type_Kind_FLOAT,
 } Type_Kind;
 
 struct Code_Type {
@@ -75,6 +86,8 @@ struct Code_Type {
     Code_Type_Pointer pointer;
     Code_Type_Func func;
     Code_Type_Alias alias;
+    Code_Type_Int int_t;
+    Code_Type_Float float_t;
   };
   Type_Kind kind;
 };
@@ -82,6 +95,7 @@ struct Code_Type {
 
 typedef struct {
   String name;
+  Code_Stmt_Decl *decl;
 } Code_Expr_Name;
 
 typedef struct {
@@ -214,8 +228,15 @@ struct Code_Stmt_Decl {
   String name;
   Code_Type *type;
   Code_Node *value;
-  b32 is_const;
   
+  // TODO(lvl5): merge bools into flags
+  b32 is_const;
+  b32 is_global;
+  
+  u32 offset; // offset from the BSS or the stack (or beginning of the struct)
+  
+  // TODO(lvl5): only global decls should have a check_state
+  // we can probably get rid of emit_state
   Resolve_State check_state;
   Resolve_State emit_state;
 };
@@ -307,6 +328,23 @@ Code_Type_Func *code_type_func(Parser *p, Code_Stmt_Decl **params, Code_Type *re
   node->expr.type_e.func.params = params;
   node->expr.type_e.func.return_type = return_type;
   return (Code_Type_Func *)node;
+}
+
+Code_Type_Int *code_type_int(Parser *p, i32 size, b32 is_signed) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_INT;
+  node->expr.type_e.int_t.size = size;
+  node->expr.type_e.int_t.is_signed = is_signed;
+  return (Code_Type_Int *)node;
+}
+
+Code_Type_Float *code_type_float(Parser *p, i32 size) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_FLOAT;
+  node->expr.type_e.float_t.size = size;
+  return (Code_Type_Float *)node;
 }
 
 Code_Type_Pointer *code_type_pointer(Parser *p, Code_Type *base) {
