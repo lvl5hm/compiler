@@ -182,8 +182,11 @@ int main() {
 #endif
     
     Bc_Emitter emitter = {0};
+    emitter.bss_segment = arena_push_array(arena, byte, megabytes(2));
     emitter.instructions = arena_push_array(arena, Bc_Instruction, 2048);
+    emitter.parser = p;
     res.common->bc_emitter = &emitter;
+    
     
     // NOTE(lvl5): c header
 #if 0

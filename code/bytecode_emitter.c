@@ -1,9 +1,11 @@
 typedef enum {
   I_NONE,
+  I_COMMENT,
   
   I_CONST,
   I_CONST_STACK,
   I_CONST_BSS,
+  I_STACK_CHANGE,
   
   I_ADD_int,
   I_ADD_f32,
@@ -77,9 +79,11 @@ typedef enum {
 char *Instruction_Kind_To_String[] = {
   [I_NONE] = "NONE",
   
+  [I_COMMENT] = "//",
   [I_CONST] = "CONST",
   [I_CONST_STACK] = "CONST_STACK",
   [I_CONST_BSS] = "CONST_BSS",
+  [I_STACK_CHANGE] = "STACK_CHANGE",
   
   [I_ADD_int] = "ADD_int",
   [I_ADD_f32] = "ADD_f32",
@@ -161,6 +165,7 @@ typedef union {
   u32 _u32;
   u16 _u16;
   u8 _u8;
+  String *_comment;
 } Bc_Param;
 
 typedef struct {
@@ -171,7 +176,10 @@ typedef struct {
 struct Bc_Emitter {
   Bc_Instruction *instructions;
   u32 instruction_count;
-  u32 bss_size;
+  
+  byte *bss_segment;
+  Code_Func *current_func;
+  Parser *parser;
 };
 
 void bc_instruction(Bc_Emitter *e, Instruction_Kind kind, Bc_Param param) {
@@ -181,21 +189,12 @@ void bc_instruction(Bc_Emitter *e, Instruction_Kind kind, Bc_Param param) {
   e->instructions[e->instruction_count++] = instr;
 }
 
-typedef struct {
-  byte *memory;
-  u64 bss_begin;
-  u64 stack_begin;
-  u64 heap_begin;
-} Bytecode_Runner;
-
-
 
 void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
-  Bytecode_Runner vm = {0};
-  vm.memory = (byte *)emitter->instructions;
-  vm.bss_begin = emitter->instruction_count*sizeof(Bc_Instruction);
-  vm.stack_begin = vm.bss_begin + kilobytes(5);
-  vm.heap_begin = vm.stack_begin + kilobytes(1024);
+  byte *func_segment = (byte *)emitter->instructions;
+  byte *bss_segment = emitter->bss_segment;
+  byte *stack = arena_push_array(arena, byte, kilobytes(100));
+  byte *heap = arena_push_array(arena, byte, megabytes(10));
   
   u32 stack_size = 0;
   
@@ -214,13 +213,13 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
       
       case I_CONST_STACK: {
         Bc_Param param = instr->param;
-        param._i64 += vm.stack_begin + stack_size;
+        param._u64 += (u64)stack + param._i64;
         exec[exec_count++] = param;
       } break;
       
       case I_LOAD: {
         Bc_Param address = exec[--exec_count];
-        u64 *item = (u64 *)(vm.memory + address._u64);
+        u64 *item = (u64 *)(address._u64);
         exec[exec_count++] = (Bc_Param){ ._u64 = *item };
       } break;
       
@@ -239,7 +238,7 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
       case I_STORE_i32: {
         Bc_Param address = exec[--exec_count];
         Bc_Param value = exec[--exec_count];
-        i32 *loc = (i32 *)(vm.memory + address._u64);
+        i32 *loc = (i32 *)(address._u64);
         *loc = value._i32;
       } break;
       
@@ -261,10 +260,88 @@ void bytecode_print(Bc_Emitter *e) {
   for (u32 i = 0; i < e->instruction_count; i++) {
     Bc_Instruction instr = e->instructions[i];
     char *mnemonic = Instruction_Kind_To_String[instr.kind];
-    printf("%s", mnemonic);
-    if (instr.param._u64 != NULL_PARAM._u64) {
+    printf("%04d  %s", i, mnemonic);
+    
+    switch (instr.kind) {
+      case I_COMMENT:
+      printf(" %s", tcstring(*instr.param._comment));
+      break;
+      
+      case I_CONST:
+      case I_CONST_STACK:
+      case I_CONST_BSS:
+      case I_CALL:
+      case I_CALL_FOREIGN:
+      case I_JMP_TRUE:
+      case I_JMP_FALSE:
+      case I_JMP:
+      case I_STACK_CHANGE:
       printf(" %lld", instr.param._i64);
+      break;
+      
+      case I_ADD_f32:
+      case I_SUB_f32:
+      case I_MUL_f32:
+      case I_DIV_f32:
+      case I_NEG_f32:
+      case I_STORE_f32:
+      case I_GT_f32:
+      case I_GTE_f32:
+      case I_EQ_f32:
+      case I_NE_f32:
+      printf(" %0.3f", instr.param._f32);
+      break;
+      
+      case I_SUB_f64:
+      case I_ADD_f64:
+      case I_MUL_f64:
+      case I_DIV_f64:
+      case I_NEG_f64:
+      case I_STORE_f64:
+      case I_GT_f64:
+      case I_GTE_f64:
+      case I_EQ_f64:
+      case I_NE_f64:
+      printf(" %0.3f", instr.param._f64);
+      break;
+      
+      case I_CAST_f32_f64:
+      case I_CAST_f64_f32:
+      case I_CAST_f64_int:
+      case I_CAST_f32_int:
+      case I_MEMCOPY:
+      case I_HLT:
+      case I_ADD_int:
+      case I_SUB_int:
+      case I_MUL_int:
+      case I_DIV_int:
+      case I_NEG_int:
+      case I_MOD:
+      case I_BIT_AND:
+      case I_BIT_OR:
+      case I_BIT_NEG:
+      case I_BIT_XOR:
+      case I_LOAD:
+      case I_STORE_i8:
+      case I_STORE_i16:
+      case I_STORE_i32:
+      case I_STORE_i64:
+      case I_GT_int:
+      case I_GTE_int:
+      case I_EQ_int:
+      case I_NE_int:
+      case I_CAST_int_f32:
+      case I_CAST_int_f64:
+      break;
+      
+      case I_RET:
+      printf("\n");
+      break;
+      
+      default: assert(false);
+      break;
     }
+    
     printf("\n");
   }
 }
@@ -302,7 +379,7 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
     } break;
     case Expr_Kind_NAME: {
       Code_Stmt_Decl *decl = expr->name.decl;
-      if (decl->is_global) {
+      if (decl->storage_kind == Storage_Kind_BSS) {
         bc_instruction(e, I_CONST_BSS, PARAM(i32, decl->offset));
       } else {
         bc_instruction(e, I_CONST_STACK, PARAM(i32, decl->offset));
@@ -374,23 +451,29 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
       }
     } break;
     case Expr_Kind_CALL: {
-      assert(false);
-      bc_emit_expr(e, expr->call.func);
+      //assert(false);
 #if 0
       assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
       e->instruction_count--;
 #endif
       
-      u32 total_args_size = 0;
+      bc_instruction(e, I_STACK_CHANGE, PARAM(i64, e->current_func->stack_size));
+      
+      i32 total_args_size = 0;
       for (u32 i = 0; i < sb_count(expr->call.args); i++) {
         Code_Expr *arg = expr->call.args[i];
+        
         bc_emit_expr(e, arg);
-        assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
-        e->instruction_count--;
-        // TODO(lvl5): store the argument on the stack
-        total_args_size += get_size_of_type(arg->type);
+        bc_instruction(e, I_CONST_STACK, PARAM(i64, total_args_size));
+        bc_instruction(e, I_STORE_i32, NULL_PARAM);
+        
+        i32 size = get_size_of_type(arg->type);
+        total_args_size += size;
       }
-      bc_instruction(e, I_CALL, PARAM(i32, total_args_size));
+      
+      bc_emit_expr(e, expr->call.func);
+      bc_instruction(e, I_CALL, PARAM(i64, e->instruction_count+1));
+      bc_instruction(e, I_STACK_CHANGE, PARAM(i64, -e->current_func->stack_size));
     } break;
     case Expr_Kind_CAST: {
       if (expr->cast.implicit) {
@@ -416,11 +499,19 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
   }
 }
 
-void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl);
 
 void bc_emit_stmt_block(Bc_Emitter *, Code_Stmt_Block *);
 
 void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
+  {
+    String *comment = arena_push_struct(scratch_arena, String);
+    Code_Node *node = (Code_Node *)stmt;
+    Token t = e->parser->tokens[node->first_token];
+    *comment = get_line_from_index(e->parser->src, (u32)(t.value.data - e->parser->src.data));
+    
+    bc_instruction(e, I_COMMENT, PARAM(comment, comment));
+  }
+  
   switch (stmt->kind) {
     case Stmt_Kind_ASSIGN: {
       // TODO(lvl5):  if struct, right should also be no deref
@@ -431,8 +522,39 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
       
       switch (stmt->assign.op) {
         case T_ASSIGN: {
-          if (stmt->assign.left->type == builtin_i32) {
-            bc_instruction(e, I_STORE_i32, NULL_PARAM);
+          Code_Type *type = get_final_type(stmt->assign.left->type);
+          if (type->kind == Type_Kind_INT) {
+            switch (type->int_t.size) {
+              case 1:
+              bc_instruction(e, I_STORE_i8, NULL_PARAM);
+              break;
+              
+              case 2:
+              bc_instruction(e, I_STORE_i16, NULL_PARAM);
+              break;
+              
+              case 4:
+              bc_instruction(e, I_STORE_i32, NULL_PARAM);
+              break;
+              
+              case 8:
+              bc_instruction(e, I_STORE_i64, NULL_PARAM);
+              break;
+              
+              default: assert(false);
+            }
+          } else if (type->kind == Type_Kind_FLOAT) {
+            switch (type->float_t.size) {
+              case 4:
+              bc_instruction(e, I_STORE_f32, NULL_PARAM);
+              break;
+              
+              case 8:
+              bc_instruction(e, I_STORE_f64, NULL_PARAM);
+              break;
+              
+              default: assert(false);
+            }
           } else {
             assert(false);
           }
@@ -470,7 +592,7 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
       }
     } break;
     case Stmt_Kind_DECL: {
-      bc_emit_decl(e, &stmt->decl);
+      bc_emit_decl(e, &stmt->decl, Resolve_State_FULL);
     } break;
     default: assert(false);
   }
@@ -482,11 +604,27 @@ void bc_emit_stmt_block(Bc_Emitter *e, Code_Stmt_Block *block) {
   }
 }
 
-void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl) {
+void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
+  if (decl->emit_state == Resolve_State_FULL) {
+    return;
+  }
+  decl->emit_state = Resolve_State_FULL;
+  
   switch (decl->value->kind) {
     case Code_Kind_FUNC: {
+      String *comment = arena_push_struct(scratch_arena, String);
+      *comment = concat(scratch_arena, const_string("func "), decl->name);
+      
+      bc_instruction(e, I_COMMENT, PARAM(comment, comment));
+      
+      *(u64 *)(e->bss_segment + decl->offset) = (u64)(e->instructions + e->instruction_count);
+      
+      Code_Func *old_func = e->current_func;
+      e->current_func = &decl->value->func;
       bc_emit_stmt_block(e, decl->value->func.body);
-      // TODO(lvl5): assign func in the bss
+      e->current_func = &decl->value->func;
+      
+      bc_instruction(e, I_RET, NULL_PARAM);
     } break;
     
     case Code_Kind_EXPR: {

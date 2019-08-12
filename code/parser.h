@@ -181,6 +181,7 @@ typedef struct {
   Code_Stmt_Block *body;
   b32 foreign;
   Scope *scope;
+  i32 stack_size;
 } Code_Func;
 
 typedef struct {
@@ -224,6 +225,13 @@ typedef enum {
   Resolve_State_FULL,
 } Resolve_State;
 
+typedef enum {
+  Storage_Kind_NONE,
+  Storage_Kind_FUNC,
+  Storage_Kind_BSS,
+  Storage_Kind_STACK,
+} Storage_Kind;
+
 struct Code_Stmt_Decl {
   String name;
   Code_Type *type;
@@ -231,8 +239,8 @@ struct Code_Stmt_Decl {
   
   // TODO(lvl5): merge bools into flags
   b32 is_const;
-  b32 is_global;
   
+  Storage_Kind storage_kind;
   u32 offset; // offset from the BSS or the stack (or beginning of the struct)
   
   // TODO(lvl5): only global decls should have a check_state

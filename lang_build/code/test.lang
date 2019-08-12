@@ -1,4 +1,15 @@
+tst :: func() {
+  pls : i64 = 77;
+}
+
 main :: func() {
   foo : i32 = 523;
-  bar : i32 = foo + 43;
+  bar : i64 = foo * 10 + 43;
+  do_foo(999);
+}
+
+do_foo :: func(wat: i64) {
+  wutever : i64 = 156;
+  wutever = wutever + wat; // right now this stores an i8; my implicit casts are fucked
+  sup : i32 = 11;
 }
