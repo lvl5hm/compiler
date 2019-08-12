@@ -10,6 +10,6 @@ main :: func() {
 
 do_foo :: func(wat: i64) {
   wutever : i64 = 156;
-  wutever = wutever + wat; // right now this stores an i8; my implicit casts are fucked
+  wutever = wutever + wat;
   sup : i32 = 11;
 }

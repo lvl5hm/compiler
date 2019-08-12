@@ -111,10 +111,10 @@ int main() {
   
   Arena _arena;
   Arena *arena = &_arena;
-  arena_init(arena, malloc(megabytes(10)), megabytes(10));
+  arena_init(arena, malloc(megabytes(100)), megabytes(100));
   arena_init(scratch_arena, malloc(megabytes(1)), megabytes(1));
   
-  bytecode_test(arena);
+  //bytecode_test(arena);
   
   Buffer file = read_entire_file(arena, const_string("code\\test.lang"));
   file.data[file.size++] = 0;
@@ -215,8 +215,15 @@ int main() {
       ));
 #endif
     
+    
+    clock_t front_end = clock();
+    
+    f64 front_time = (f64)(front_end - front_start)/(f64)(CLOCKS_PER_SEC);
+    printf("front time: %0.3f s\n", front_time);
+    
     if (sb_count(p->errors) == 0) {
       bytecode_print(&emitter);
+      bytecode_run(arena, &emitter);
       __debugbreak();
       //bytecode_run(arena, &emitter);
       //builder_to_file(const_string("code\\out.c"), emitter.builder);

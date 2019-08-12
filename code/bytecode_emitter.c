@@ -5,6 +5,7 @@ typedef enum {
   I_CONST,
   I_CONST_STACK,
   I_CONST_BSS,
+  
   I_STACK_CHANGE,
   
   I_ADD_int,
@@ -30,8 +31,11 @@ typedef enum {
   I_MOD,
   I_BIT_AND,
   I_BIT_OR,
-  I_BIT_NEG,
+  I_BIT_NOT,
   I_BIT_XOR,
+  I_AND,
+  I_OR,
+  I_NOT,
   
   I_LOAD,
   
@@ -46,17 +50,13 @@ typedef enum {
   I_GT_f32,
   I_GT_f64,
   
+  
   I_GTE_int,
   I_GTE_f32,
   I_GTE_f64,
   
-  I_EQ_int,
-  I_EQ_f32,
-  I_EQ_f64,
-  
-  I_NE_int,
-  I_NE_f32,
-  I_NE_f64,
+  I_EQ,
+  I_NE,
   
   I_CAST_int_f32,
   I_CAST_int_f64,
@@ -108,8 +108,11 @@ char *Instruction_Kind_To_String[] = {
   [I_MOD] = "MOD",
   [I_BIT_AND] = "BIT_AND",
   [I_BIT_OR] = "BIT_OR",
-  [I_BIT_NEG] = "BIT_NEG",
+  [I_BIT_NOT] = "BIT_NOT",
   [I_BIT_XOR] = "BIT_XOR",
+  [I_NOT] = "NOT",
+  [I_AND] = "AND",
+  [I_OR] = "OR",
   
   [I_LOAD] = "LOAD",
   
@@ -128,13 +131,8 @@ char *Instruction_Kind_To_String[] = {
   [I_GTE_f32] = "GTE_f32",
   [I_GTE_f64] = "GTE_f64",
   
-  [I_EQ_int] = "EQ_int",
-  [I_EQ_f32] = "EQ_f32",
-  [I_EQ_f64] = "EQ_f64",
-  
-  [I_NE_int] = "NE_int",
-  [I_NE_f32] = "NE_f32",
-  [I_NE_f64] = "NE_f64",
+  [I_EQ] = "EQ",
+  [I_NE] = "NE",
   
   [I_CAST_int_f32] = "CAST_int_f32",
   [I_CAST_int_f64] = "CAST_int_f64",
@@ -180,6 +178,7 @@ struct Bc_Emitter {
   byte *bss_segment;
   Code_Func *current_func;
   Parser *parser;
+  i32 entry_instruction_index;
 };
 
 void bc_instruction(Bc_Emitter *e, Instruction_Kind kind, Bc_Param param) {
@@ -202,10 +201,34 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
   u32 exec_count = 0;
   
   b32 is_running = true;
-  Bc_Instruction *instr = emitter->instructions;
+  Bc_Instruction *instr = emitter->instructions + emitter->entry_instruction_index;
   
   while (is_running) {
     switch (instr->kind) {
+      case I_COMMENT: {
+        
+      } break;
+      
+      case I_STACK_CHANGE: {
+        Bc_Param param = instr->param;
+        stack += param._i64;
+      } break;
+      
+      case I_CALL: {
+        Bc_Param func_address = exec[--exec_count];
+        Bc_Param param = instr->param;
+        exec[exec_count++] = param;
+        
+        instr = (Bc_Instruction *)func_address._u64;
+        continue;
+      } break;
+      
+      case I_RET: {
+        Bc_Param address = exec[--exec_count];
+        instr = (Bc_Instruction *)(emitter->instructions + address._u64);
+        continue;
+      } break;
+      
       case I_CONST: {
         Bc_Param param = instr->param;
         exec[exec_count++] = param;
@@ -213,7 +236,13 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
       
       case I_CONST_STACK: {
         Bc_Param param = instr->param;
-        param._u64 += (u64)stack + param._i64;
+        param._u64 += (u64)stack;
+        exec[exec_count++] = param;
+      } break;
+      
+      case I_CONST_BSS: {
+        Bc_Param param = instr->param;
+        param._u64 += (u64)bss_segment;
         exec[exec_count++] = param;
       } break;
       
@@ -229,10 +258,66 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         exec[exec_count++] = (Bc_Param){ ._i64 = left._i64*right._i64 };
       } break;
       
+      case I_MUL_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = left._f32*right._f32 };
+      } break;
+      
+      case I_MUL_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = left._f64*right._f64 };
+      } break;
+      
       case I_ADD_int: {
         Bc_Param right = exec[--exec_count];
         Bc_Param left = exec[--exec_count];
         exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 + right._i64 };
+      } break;
+      
+      case I_ADD_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = left._f32 + right._f32 };
+      } break;
+      
+      case I_ADD_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = left._f64 + right._f64 };
+      } break;
+      
+      case I_SUB_int: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 + right._i64 };
+      } break;
+      
+      case I_SUB_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = left._f32 + right._f32 };
+      } break;
+      
+      case I_SUB_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = left._f64 + right._f64 };
+      } break;
+      
+      case I_STORE_i8: {
+        Bc_Param address = exec[--exec_count];
+        Bc_Param value = exec[--exec_count];
+        i8 *loc = (i8 *)(address._u64);
+        *loc = value._i8;
+      } break;
+      
+      case I_STORE_i16: {
+        Bc_Param address = exec[--exec_count];
+        Bc_Param value = exec[--exec_count];
+        i16 *loc = (i16 *)(address._u64);
+        *loc = value._i16;
       } break;
       
       case I_STORE_i32: {
@@ -242,8 +327,218 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         *loc = value._i32;
       } break;
       
+      case I_STORE_i64: {
+        Bc_Param address = exec[--exec_count];
+        Bc_Param value = exec[--exec_count];
+        i64 *loc = (i64 *)(address._u64);
+        *loc = value._i64;
+      } break;
+      
+      case I_STORE_f32: {
+        Bc_Param address = exec[--exec_count];
+        Bc_Param value = exec[--exec_count];
+        f32 *loc = (f32 *)(address._u64);
+        *loc = value._f32;
+      } break;
+      
+      case I_STORE_f64: {
+        Bc_Param address = exec[--exec_count];
+        Bc_Param value = exec[--exec_count];
+        f64 *loc = (f64 *)(address._u64);
+        *loc = value._f64;
+      } break;
+      
+      
       case I_HLT: {
         is_running = false;
+      } break;
+      
+      
+      case I_DIV_int: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64/right._i64 };
+      } break;
+      
+      case I_DIV_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = left._f32/right._f32 };
+      } break;
+      
+      case I_DIV_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = left._f64/right._f64 };
+      } break;
+      
+      case I_NEG_int: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = -right._i64 };
+      } break;
+      
+      case I_NEG_f32: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = -right._f32 };
+      } break;
+      
+      case I_NEG_f64: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = -right._f64 };
+      } break;
+      
+      case I_MOD: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 % right._i64 };
+      } break;
+      
+      case I_BIT_AND: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 & right._i64 };
+      } break;
+      
+      case I_BIT_OR: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 | right._i64 };
+      } break;
+      
+      case I_BIT_NOT: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = ~right._i64 };
+      } break;
+      
+      case I_BIT_XOR: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 ^ right._i64 };
+      } break;
+      
+      case I_AND: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 && right._i64 };
+      } break;
+      
+      case I_OR: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 || right._i64 };
+      } break;
+      
+      case I_NOT: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = !right._i64 };
+      } break;
+      
+      case I_GT_int: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 > right._i64 };
+      } break;
+      
+      case I_GT_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._f32 > right._f32 };
+      } break;
+      
+      case I_GT_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._f64 > right._f64 };
+      } break;
+      
+      
+      case I_GTE_int: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 >= right._i64 };
+      } break;
+      
+      case I_GTE_f32: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._f32 >= right._f32 };
+      } break;
+      
+      case I_GTE_f64: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._f64 >= right._f64 };
+      } break;
+      
+      case I_EQ: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 == right._i64 };
+      } break;
+      
+      case I_NE: {
+        Bc_Param right = exec[--exec_count];
+        Bc_Param left = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = left._i64 != right._i64 };
+      } break;
+      
+      case I_CAST_int_f32: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = (f32)right._i64 };
+      } break;
+      
+      case I_CAST_int_f64: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = (f64)right._i64 };
+      } break;
+      
+      case I_CAST_f32_int: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = (i64)right._f32 };
+      } break;
+      
+      case I_CAST_f64_int: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._i64 = (i64)right._f64 };
+      } break;
+      
+      case I_CAST_f64_f32: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f32 = (f32)right._f64 };
+      } break;
+      
+      case I_CAST_f32_f64: {
+        Bc_Param right = exec[--exec_count];
+        exec[exec_count++] = (Bc_Param){ ._f64 = (f64)right._f32 };
+      } break;
+      
+      case I_JMP_TRUE: {
+        Bc_Param right = exec[--exec_count];
+        if (right._i64) {
+          instr += right._i64;
+        }
+      } break;
+      
+      case I_JMP_FALSE: {
+        Bc_Param right = exec[--exec_count];
+        if (!right._i64) {
+          instr += right._i64;
+        }
+      } break;
+      
+      case I_JMP: {
+        Bc_Param right = exec[--exec_count];
+        instr += right._i64;
+      } break;
+      
+      case I_MEMCOPY: {
+        Bc_Param from = exec[--exec_count];
+        Bc_Param to = exec[--exec_count];
+        Bc_Param size = instr->param;
+        copy_memory_slow((byte *)to._u64, (byte *)from._u64, size._u64);
+      } break;
+      case I_CALL_FOREIGN: {
+        assert(false);
       } break;
       
       default: assert(false);
@@ -279,19 +574,6 @@ void bytecode_print(Bc_Emitter *e) {
       printf(" %lld", instr.param._i64);
       break;
       
-      case I_ADD_f32:
-      case I_SUB_f32:
-      case I_MUL_f32:
-      case I_DIV_f32:
-      case I_NEG_f32:
-      case I_STORE_f32:
-      case I_GT_f32:
-      case I_GTE_f32:
-      case I_EQ_f32:
-      case I_NE_f32:
-      printf(" %0.3f", instr.param._f32);
-      break;
-      
       case I_SUB_f64:
       case I_ADD_f64:
       case I_MUL_f64:
@@ -300,11 +582,14 @@ void bytecode_print(Bc_Emitter *e) {
       case I_STORE_f64:
       case I_GT_f64:
       case I_GTE_f64:
-      case I_EQ_f64:
-      case I_NE_f64:
-      printf(" %0.3f", instr.param._f64);
-      break;
-      
+      case I_ADD_f32:
+      case I_SUB_f32:
+      case I_MUL_f32:
+      case I_DIV_f32:
+      case I_NEG_f32:
+      case I_STORE_f32:
+      case I_GT_f32:
+      case I_GTE_f32:
       case I_CAST_f32_f64:
       case I_CAST_f64_f32:
       case I_CAST_f64_int:
@@ -319,8 +604,11 @@ void bytecode_print(Bc_Emitter *e) {
       case I_MOD:
       case I_BIT_AND:
       case I_BIT_OR:
-      case I_BIT_NEG:
+      case I_BIT_NOT:
       case I_BIT_XOR:
+      case I_AND:
+      case I_OR:
+      case I_NOT:
       case I_LOAD:
       case I_STORE_i8:
       case I_STORE_i16:
@@ -328,8 +616,8 @@ void bytecode_print(Bc_Emitter *e) {
       case I_STORE_i64:
       case I_GT_int:
       case I_GTE_int:
-      case I_EQ_int:
-      case I_NE_int:
+      case I_EQ:
+      case I_NE:
       case I_CAST_int_f32:
       case I_CAST_int_f64:
       break;
@@ -347,30 +635,6 @@ void bytecode_print(Bc_Emitter *e) {
 }
 
 #define PARAM(T, val) (Bc_Param){ ._##T = val }
-void bytecode_test(Arena *arena) {
-  Bc_Emitter emitter = {0};
-  emitter.instructions = arena_push_array(arena, Bc_Instruction, 2048);
-  Bc_Emitter *e = &emitter;
-  
-  
-  
-  bc_instruction(e, I_CONST, PARAM(i32, 55));
-  bc_instruction(e, I_CONST_STACK, PARAM(i64, 0));
-  bc_instruction(e, I_STORE_i32, NULL_PARAM);
-  
-  bc_instruction(e, I_CONST, PARAM(i32, 10));
-  bc_instruction(e, I_CONST, PARAM(i32, 2));
-  bc_instruction(e, I_CONST_STACK, PARAM(i32, 0));
-  bc_instruction(e, I_LOAD, NULL_PARAM);
-  bc_instruction(e, I_MUL_int, NULL_PARAM);
-  bc_instruction(e, I_ADD_int, NULL_PARAM);
-  bc_instruction(e, I_CONST_STACK, PARAM(i32, 8));
-  bc_instruction(e, I_STORE_i32, NULL_PARAM);
-  bc_instruction(e, I_HLT, NULL_PARAM);
-  
-  //bytecode_run(arena, &emitter);
-}
-
 
 void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
   switch (expr->kind) {
@@ -617,6 +881,13 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
       
       bc_instruction(e, I_COMMENT, PARAM(comment, comment));
       
+      
+      // NOTE(lvl5): handle main() entry point
+      b32 is_entry = string_compare(decl->name, const_string("__main"));
+      if (is_entry) {
+        e->entry_instruction_index = e->instruction_count;
+      }
+      
       *(u64 *)(e->bss_segment + decl->offset) = (u64)(e->instructions + e->instruction_count);
       
       Code_Func *old_func = e->current_func;
@@ -624,7 +895,7 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
       bc_emit_stmt_block(e, decl->value->func.body);
       e->current_func = &decl->value->func;
       
-      bc_instruction(e, I_RET, NULL_PARAM);
+      bc_instruction(e, is_entry ? I_RET : I_HLT, NULL_PARAM);
     } break;
     
     case Code_Kind_EXPR: {
