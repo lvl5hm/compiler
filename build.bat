@@ -8,7 +8,7 @@ set compilerFlags=-Od -MTd -nologo -Oi -GR- -EHa- -WX -W4 -wd4101 -wd4702 -wd400
 set linkerFlags=-incremental:no -opt:ref OpenGL32.lib Winmm.lib user32.lib Gdi32.lib /LIBPATH:"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.21.27702\lib\x64" /LIBPATH:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.17763.0\um\x64" /LIBPATH:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.17763.0\ucrt\x64"
 
 
-cl %compilerFlags% ..\code\win32_main.c /link %linkerFlags%
+cl %compilerFlags% ..\code\win32_main.c call_foreign.obj /link %linkerFlags%
 
 popd
 

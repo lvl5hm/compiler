@@ -2,14 +2,26 @@ tst :: func() {
   pls : i64 = 77;
 }
 
-main :: func() {
-  foo : i32 = 523;
-  bar : i64 = foo * 10 + 43;
-  do_foo(999);
+string_print :: func(s: string) {
+  i := 0; // this should be i64
+  while (i < s.count) {
+    putchar(s.data[i]);
+    i += 1;
+  }
 }
 
-do_foo :: func(wat: i64) {
+main :: func() {
+  putchar(71);
+
+ // foo := do_foo(88);
+}
+
+putchar :: func(c: i8) #foreign "ucrtbase.dll";
+
+do_foo :: func(wat: i64) i32 {
+
   wutever : i64 = 156;
   wutever = wutever + wat;
   sup : i32 = 11;
+  return sup;
 }

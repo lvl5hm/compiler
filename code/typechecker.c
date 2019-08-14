@@ -884,6 +884,10 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
           child_res.common->stack_position = 0;
           
           if (!func->foreign) {
+            if (func->type->return_type != builtin_void) {
+              res.common->stack_position += 8;
+            }
+            
             for (u32 i = 0; i < sb_count(func->type->params); i++) {
               Code_Stmt_Decl *param = func->type->params[i];
               

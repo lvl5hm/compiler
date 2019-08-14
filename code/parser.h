@@ -180,6 +180,7 @@ typedef struct {
   Code_Type_Func *type;
   Code_Stmt_Block *body;
   b32 foreign;
+  String module;
   Scope *scope;
   i32 stack_size;
 } Code_Func;

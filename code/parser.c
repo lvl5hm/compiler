@@ -527,7 +527,12 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
       } else if (parser_accept(p, T_POUND)) {
         Token t = parser_get(p, -1);
         if (string_compare(t.value, const_string("foreign"))) {
-          value = (Code_Node *)code_func(p, sig, null, true);
+          Token tok_module = parser_expect(p, T_STRING);
+          Code_Func *func = code_func(p, sig, null, true);
+          func->module = tok_module.value;
+          func->module.data++;
+          func->module.count -= 2;
+          value = (Code_Node *)func;
           parser_expect(p, T_SEMI);
         } else {
           assert(false);
