@@ -13,6 +13,7 @@ typedef enum {
   T_INT,
   T_FLOAT,
   T_STRING,
+  T_CHAR,
   
   T_LPAREN,
   T_RPAREN,
@@ -86,6 +87,7 @@ typedef enum {
   T_PUSH_CONTEXT,
   T_DEFER,
   T_NULL,
+  T_WHILE,
   T_IF,
   T_KEYWORD_LAST = T_IF,
   
@@ -109,11 +111,13 @@ String Token_Kind_To_String[] = {
   [T_CONTINUE] = arr_string("continue"),
   [T_PUSH_CONTEXT] = arr_string("push_context"),
   [T_DEFER] = arr_string("defer"),
+  [T_WHILE] = arr_string("while"),
   
   [T_NONE] = arr_string("NONE"),
   [T_ERROR] = arr_string("ERROR"),
   [T_NAME] = arr_string("NAME"),
   [T_INT] = arr_string("INT"),
+  [T_CHAR] = arr_string("CHAR"),
   [T_FLOAT] = arr_string("FLOAT"),
   [T_LPAREN] = arr_string("("),
   [T_RPAREN] = arr_string(")"),
@@ -294,7 +298,6 @@ Token *tokenize(Arena *arena, String src) {
       case 0: {
         goto end;
       } break;
-      
       case ' ': {
         skip(1);
         continue;
@@ -312,6 +315,12 @@ Token *tokenize(Arena *arena, String src) {
         }
         eat();
         end(T_STRING);
+      } break;
+      case '\'': {
+        eat();
+        eat();
+        eat();
+        end(T_CHAR);
       } break;
       
       case '0': case '1': case '2': case '3': case '4':
@@ -387,7 +396,6 @@ Token *tokenize(Arena *arena, String src) {
       } break;
       
       case1('\\', T_BACKSLASH);
-      case1('\'', T_SINGLE_QUOTE);
       case1(',', T_COMMA);
       case1(';', T_SEMI);
       case1('(', T_LPAREN);

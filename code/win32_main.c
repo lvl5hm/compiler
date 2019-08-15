@@ -5,6 +5,12 @@
 
 /*
 TODO:
+[ ] add passing structs (or do they work already)
+[ ] add ctx argument
+[ ] add while loops
+[ ] remove C-style for loops
+[ ] add looping over strings
+[ ] transform for loops AST into while loops
 [ ] redefinition should be an error
 [ ] better typechecker error messages
 
@@ -151,7 +157,6 @@ int main() {
   ADD_BUILTIN_INT(i16, 2, true);
   ADD_BUILTIN_INT(i32, 4, true);
   ADD_BUILTIN_INT(i64, 8, true);
-  
   
 #define ADD_BUILTIN_FLOAT(name, size) \
   builtin_##name = (Code_Type *)code_type_float(p, size); \

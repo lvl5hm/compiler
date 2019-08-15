@@ -26,7 +26,6 @@ struct Scope {
 
 typedef struct {
   Code_Stmt_Decl **members;
-  
   Scope *scope;
   i32 size;
 } Code_Type_Struct;
@@ -136,7 +135,12 @@ typedef struct {
 
 typedef struct {
   String value;
+  i32 offset;
 } Code_Expr_String;
+
+typedef struct {
+  char value;
+} Code_Expr_Char;
 
 typedef enum {
   Expr_Kind_NONE,
@@ -154,6 +158,7 @@ typedef enum {
   Expr_Kind_NAME,
   Expr_Kind_TYPE,
   Expr_Kind_NULL,
+  Expr_Kind_CHAR,
 } Expr_Kind;
 
 struct Code_Expr {
@@ -168,6 +173,7 @@ struct Code_Expr {
     Code_Expr_Int int_e;
     Code_Expr_Float float_e;
     Code_Expr_String string;
+    Code_Expr_Char char_e;
     //Code_Expr_Array array;
     //Code_Expr_Struct struct_e;
   };
@@ -179,8 +185,11 @@ struct Code_Expr {
 typedef struct {
   Code_Type_Func *type;
   Code_Stmt_Block *body;
+  
   b32 foreign;
   String module;
+  String foreign_name;
+  
   Scope *scope;
   i32 stack_size;
 } Code_Func;
@@ -250,6 +259,11 @@ struct Code_Stmt_Decl {
   Resolve_State emit_state;
 };
 
+typedef struct {
+  Code_Expr *cond;
+  Code_Stmt *body;
+} Code_Stmt_While;
+
 typedef enum {
   Stmt_Kind_NONE,
   
@@ -260,10 +274,12 @@ typedef enum {
   Stmt_Kind_FOR,
   Stmt_Kind_KEYWORD,
   Stmt_Kind_DECL,
+  Stmt_Kind_WHILE,
 } Stmt_Kind;
 
 struct Code_Stmt {
   union {
+    Code_Stmt_While while_s;
     Code_Stmt_Assign assign;
     Code_Stmt_Expr expr;
     Code_Stmt_If if_s;
@@ -384,6 +400,13 @@ Code_Expr_String *code_expr_string(Parser *p, String value) {
   return (Code_Expr_String *)node;
 }
 
+Code_Expr_Char *code_expr_char(Parser *p, char value) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_CHAR;
+  node->expr.char_e.value = value;
+  return (Code_Expr_Char *)node;
+}
+
 Code_Type_Struct *code_type_struct(Parser *p, Code_Stmt_Decl **members) {
   Code_Node *node = code_node(p, Code_Kind_EXPR);
   node->expr.kind = Expr_Kind_TYPE;
@@ -481,6 +504,14 @@ Code_Stmt_Assign *code_stmt_assign(Parser *p, Code_Expr *left, Token_Kind op, Co
   node->stmt.assign.right = right;
   node->stmt.assign.op = op;
   return (Code_Stmt_Assign *)node;
+}
+
+Code_Stmt_While *code_stmt_while(Parser *p, Code_Expr *cond, Code_Stmt *body) {
+  Code_Node *node = code_node(p, Code_Kind_STMT);
+  node->stmt.kind = Stmt_Kind_WHILE;
+  node->stmt.while_s.cond = cond;
+  node->stmt.while_s.body = body;
+  return (Code_Stmt_While *)node;
 }
 
 Code_Stmt_If *code_stmt_if(Parser *p, Code_Expr *cond, Code_Stmt *then_branch, Code_Stmt *else_branch) {

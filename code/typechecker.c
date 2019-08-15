@@ -17,6 +17,7 @@ Code_Type *builtin_f64 = 0;
 
 Code_Type *builtin_void = 0;
 Code_Type *builtin_voidptr = 0;
+Code_Type *builtin_string = 0;
 
 #define ADD_CTX_PARAM false
 
@@ -390,7 +391,12 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
     case Stmt_Kind_BLOCK: {
       resolve_stmt_block(res, scope, &stmt->block, /*is_func_body*/ false);
     } break;
+    case Stmt_Kind_WHILE: {
+      resolve_expr(res, scope, stmt->while_s.cond);
+      resolve_stmt(res, scope, stmt->while_s.body);
+    } break;
     case Stmt_Kind_FOR: {
+      assert(false);
       resolve_stmt(res, scope, stmt->for_s.init);
       resolve_expr(res, scope, stmt->for_s.cond);
       resolve_stmt(res, scope, stmt->for_s.post);
@@ -461,7 +467,7 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
       type->enum_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
         String member = type->enum_t.members[i];
-        // TODO(lvl5): specify enum types
+        // TODO(lvl5): specify type of enum values
         scope_add(child_scope,
                   code_stmt_decl(res.common->parser, member, builtin_i32,
                                  (Code_Node *)code_expr_int(res.common->parser, i, 31), true));
@@ -472,10 +478,16 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
     case Type_Kind_STRUCT: {
       Scope *child_scope = alloc_scope(res.common->parser->arena, scope);
       type->struct_t.scope = child_scope;
+      
+      i32 offset = 0;
       for (u32 i = 0; i < sb_count(type->struct_t.members); i++) {
         Code_Stmt_Decl *member = type->struct_t.members[i];
         resolve_decl_full(res, child_scope, member);
+        i32 size = get_size_of_type(member->type);
+        member->offset = offset;
+        offset += size;
       }
+      type->struct_t.size = offset;
     } break;
     
     case Type_Kind_PTR: {
@@ -748,6 +760,10 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       
       expr->type = expr->cast.cast_type;
     } break;
+    
+    case Expr_Kind_CHAR: {
+      expr->type = builtin_i8;
+    } break;
     case Expr_Kind_INT: {
       switch (expr->int_e.size) {
         case 7:
@@ -777,7 +793,10 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
     case Expr_Kind_STRING: {
       resolve_name(res, scope, const_string("string"), Resolve_State_FULL);
       resolve_name(res, scope, const_string("__string_const"), Resolve_State_FULL);
-      expr->type = (Code_Type *)code_type_alias(res.common->parser, const_string("string"));
+      expr->type = builtin_string;
+      // NOTE(lvl5): allocate space on the bss
+      expr->string.offset = res.common->bss_position;
+      res.common->bss_position += expr->string.value.count + 1;
     } break;
     case Expr_Kind_NAME: {
       resolve_name(res, scope, expr->name.name, Resolve_State_FULL);
@@ -829,6 +848,9 @@ void resolve_decl_partial(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
       
       case Code_Kind_FUNC: {
         Code_Func *func = &decl->value->func;
+        if (func->foreign && func->foreign_name.count == 0) {
+          func->foreign_name = decl->name;
+        }
         value_type = (Code_Type *)func->type;
         
         Scope *child_scope = alloc_scope(res.common->parser->arena, scope);

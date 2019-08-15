@@ -18,7 +18,6 @@ mov r12, r8 ; count
 sub r12, 4
 
 
-
 mov rcx, [r11]
 movsd XMM0, qword ptr [r11]
 mov rdx, [r11 + 8]

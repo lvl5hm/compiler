@@ -1,23 +1,5 @@
 #include "parser.h"
 
-typedef enum {
-  Dep_Kind_NONE,
-  
-  Dep_Kind_EXISTS,
-  Dep_Kind_SIGNATURE,
-  Dep_Kind_HARD,
-} Dep_Kind;
-
-
-typedef struct Dep_Node Dep_Node;
-
-struct Dep_Node {
-  Code_Stmt_Decl *decl;
-  Dep_Kind kind;
-  Dep_Node **dependents;
-  i32 dep_count;
-};
-
 Token ERROR_TOKEN = {0};
 
 Token parser_get(Parser *p, i32 offset) {
@@ -248,6 +230,10 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
       else_branch = parse_stmt(p, true);
     }
     result = (Code_Stmt *)code_stmt_if(p, cond, then_branch, else_branch);
+  } else if (parser_accept(p, T_WHILE)) {
+    Code_Expr *cond = parse_expr(p);
+    Code_Stmt *body = parse_stmt(p, true);
+    result = (Code_Stmt *)code_stmt_while(p, cond, body);
   } else if (parser_accept(p, T_FOR)) {
     Code_Stmt *init = parse_stmt(p, false);
     
@@ -327,6 +313,8 @@ Code_Expr *parse_expr_atom(Parser *p) {
   } else if (parser_accept(p, T_INT)) {
     u64 value = string_to_u64(parser_prev(p).value);
     
+    // TODO(lvl5): this seems to be kinda stupid
+    // you can deduce the size later
     i32 size = 0;
     if (value <= I8_MAX) {
       size = 7;
@@ -357,6 +345,9 @@ Code_Expr *parse_expr_atom(Parser *p) {
     result = (Code_Expr *)code_expr_string(p, value);
   } else if (parser_accept(p, T_NULL)) {
     result = (Code_Expr *)code_expr_null(p);
+  } else if (parser_accept(p, T_CHAR)) {
+    Token tok_char = parser_prev(p);
+    result = (Code_Expr *)code_expr_char(p, tok_char.value.data[1]);
   } else {
     result = (Code_Expr *)parse_type(p);
   }
@@ -527,11 +518,16 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
       } else if (parser_accept(p, T_POUND)) {
         Token t = parser_get(p, -1);
         if (string_compare(t.value, const_string("foreign"))) {
+          String foreign_name = {0};
+          if (parser_accept(p, T_NAME)) {
+            foreign_name = parser_prev(p).value;
+          }
           Token tok_module = parser_expect(p, T_STRING);
           Code_Func *func = code_func(p, sig, null, true);
           func->module = tok_module.value;
           func->module.data++;
           func->module.count -= 2;
+          func->foreign_name = foreign_name;
           value = (Code_Node *)func;
           parser_expect(p, T_SEMI);
         } else {

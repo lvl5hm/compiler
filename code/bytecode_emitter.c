@@ -166,7 +166,7 @@ typedef union {
 } Bc_Param;
 
 typedef struct {
-  u8 kind;
+  Instruction_Kind kind;
   Bc_Param param;
 } Bc_Instruction;
 
@@ -191,7 +191,7 @@ Bc_Instruction *bc_instruction(Bc_Emitter *e, Instruction_Kind kind, Bc_Param pa
 
 Bc_Param call_foreign(void *fn, Bc_Param *args, i32 count);
 
-
+#define FOREIGN_FUNCTION_PTR_BIT (1LL << 63)
 void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
   byte *func_segment = (byte *)emitter->instructions;
   byte *bss_segment = emitter->bss_segment;
@@ -224,10 +224,13 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         exec[exec_count++] = instr->param;
         Code_Type_Func *func = (Code_Type_Func *)func_param._ptr;
         
-        u64 is_foreign = address._u64 & 1LL << 63;
+        u64 is_foreign = address._u64 & FOREIGN_FUNCTION_PTR_BIT;
         if (is_foreign) {
-          address._u64 &= ~(1LL << 63);
-          Bc_Param *args = sb_new(scratch_arena, Bc_Param, 8);
+          address._u64 &= ~FOREIGN_FUNCTION_PTR_BIT;
+          i32 arg_count = sb_count(func->params);
+          if (arg_count < 4) arg_count = 4;
+          
+          Bc_Param *args = sb_new(scratch_arena, Bc_Param, arg_count);
           i32 stack_offset = 8; // for return value
           
           for (u32 arg_index = 0; arg_index < sb_count(func->params); arg_index++) {
@@ -243,8 +246,9 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
             }
           }
           
-          i32 arg_count = sb_count(func->params);
-          if (arg_count < 4) arg_count = 4;
+          // NOTE(lvl5): the call_foreign() function is kinda shitty,
+          // the first 4 args in the array need to point to valid memory
+          // and arg_count has to be >=4
           Bc_Param result = call_foreign(address._ptr, args, arg_count);
           *(Bc_Param *)(stack + 0) = result;
         } else {
@@ -663,6 +667,44 @@ void bytecode_print(Bc_Emitter *e) {
 
 #define PARAM(T, val) (Bc_Param){ ._##T = val }
 
+void bc_emit_expr(Bc_Emitter *, Code_Expr *);
+
+void bc_emit_func_call(Bc_Emitter *e, Code_Expr_Call *call) {
+  Code_Type_Func *func = &call->func->type->func;
+  
+  i32 total_args_size = 0;
+  if (func->return_type != builtin_void) {
+    total_args_size += 8; // a pointer to the return value is first
+    // on the called function sstack
+  }
+  
+  for (u32 i = 0; i < sb_count(call->args); i++) {
+    Code_Expr *arg = call->args[i];
+    
+    bc_emit_expr(e, arg);
+    bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size + total_args_size));
+    bc_instruction(e, I_STORE_i32, NULL_PARAM);
+    
+    i32 size = get_size_of_type(arg->type);
+    total_args_size += size;
+  }
+  
+  bc_emit_expr(e, call->func);
+  bc_instruction(e, I_STACK_CHANGE, PARAM(i64, e->current_func->stack_size));
+  
+  
+  bc_instruction(e, I_CONST, PARAM(ptr, func));
+  bc_instruction(e, I_CALL, PARAM(i64, e->instruction_count+1));
+  
+  bc_instruction(e, I_STACK_CHANGE, PARAM(i64, -e->current_func->stack_size));
+  
+  if (func->return_type != builtin_void) {
+    // load the return value into the exec stack
+    bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size));
+    bc_instruction(e, I_LOAD, NULL_PARAM);
+  }
+}
+
 void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
   switch (expr->kind) {
     case Expr_Kind_TYPE: {
@@ -706,7 +748,7 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
           Bc_Instruction *instr = e->instructions + e->instruction_count-1;
           if (expr->binary.left->type->kind != Type_Kind_PTR) {
             assert(instr->kind == I_LOAD);
-            instr = e->instructions + --e->instruction_count;
+            instr = e->instructions + --e->instruction_count - 1;
           }
           assert(instr->kind == I_CONST_STACK || 
                  instr->kind == I_CONST_BSS);
@@ -714,7 +756,12 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
           bc_instruction(e, I_LOAD, NULL_PARAM);
         } break;
         case T_SUBSCRIPT: {
-          assert(false);
+          Code_Type *right_type = get_final_type(expr->binary.right->type);
+          assert(right_type->kind == Type_Kind_INT);
+          bc_emit_expr(e, expr->binary.left);
+          bc_emit_expr(e, expr->binary.right);
+          bc_instruction(e, I_ADD_int, NULL_PARAM);
+          bc_instruction(e, I_LOAD, NULL_PARAM);
         } break;
         
         case T_ADD: {
@@ -741,51 +788,19 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
           bc_instruction(e, I_GT_int, NULL_PARAM);
         } break;
         
+        case T_LESS: {
+          bc_emit_expr(e, expr->binary.right);
+          bc_emit_expr(e, expr->binary.left);
+          bc_instruction(e, I_GT_int, NULL_PARAM);
+        } break;
+        
         default: {
           assert(false);
         } break;
       }
     } break;
     case Expr_Kind_CALL: {
-      //assert(false);
-#if 0
-      assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
-      e->instruction_count--;
-#endif
-      Code_Type_Func *func = &expr->call.func->type->func;
-      
-      
-      i32 total_args_size = 0;
-      if (func->return_type != builtin_void) {
-        total_args_size += 8; // a pointer to the return value is first
-        // on the called function sstack
-      }
-      
-      for (u32 i = 0; i < sb_count(expr->call.args); i++) {
-        Code_Expr *arg = expr->call.args[i];
-        
-        bc_emit_expr(e, arg);
-        bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size + total_args_size));
-        bc_instruction(e, I_STORE_i32, NULL_PARAM);
-        
-        i32 size = get_size_of_type(arg->type);
-        total_args_size += size;
-      }
-      
-      bc_emit_expr(e, expr->call.func);
-      bc_instruction(e, I_STACK_CHANGE, PARAM(i64, e->current_func->stack_size));
-      
-      
-      bc_instruction(e, I_CONST, PARAM(ptr, func));
-      bc_instruction(e, I_CALL, PARAM(i64, e->instruction_count+1));
-      
-      bc_instruction(e, I_STACK_CHANGE, PARAM(i64, -e->current_func->stack_size));
-      
-      if (func->return_type != builtin_void) {
-        // load the return value into the exec stack
-        bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size));
-        bc_instruction(e, I_LOAD, NULL_PARAM);
-      }
+      bc_emit_func_call(e, &expr->call);
     } break;
     case Expr_Kind_CAST: {
       if (expr->cast.implicit) {
@@ -794,6 +809,9 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
         assert(false);
       }
     } break;
+    case Expr_Kind_CHAR: {
+      bc_instruction(e, I_CONST, PARAM(i64, expr->char_e.value));
+    } break;
     case Expr_Kind_INT: {
       bc_instruction(e, I_CONST, PARAM(i64, expr->int_e.value));
     } break;
@@ -801,6 +819,26 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
       bc_instruction(e, I_CONST, PARAM(f64, expr->float_e.value));
     } break;
     case Expr_Kind_STRING: {
+      // store the string in the bss
+      char *data = (char *)(e->bss_segment + expr->string.offset);
+      copy_memory_slow(data,
+                       expr->string.value.data, expr->string.value.count);
+      // call the __string_const function
+      // TODO(lvl5): should this be done in the typechecker?
+      Code_Expr **args = sb_new(e->parser->arena, Code_Expr *, 2);
+      Code_Expr *ptr = (Code_Expr *)code_expr_int(e->parser, (u64)data, 64);
+      ptr->type = (Code_Type *)code_type_pointer(e->parser, builtin_i8);
+      
+      Code_Expr *count = (Code_Expr *)code_expr_int(e->parser, expr->string.value.count, 64);
+      count->type = builtin_u64;
+      
+      sb_push(args, ptr);
+      sb_push(args, count);
+      //Code_Expr_Call *string_const_call = code_expr_call(e->parser, );
+      //bc_emit_func_call(
+      
+      // deal with returning and assigning structs
+      
       assert(false);
     } break;
     case Expr_Kind_NULL: {
@@ -826,7 +864,7 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
   
   switch (stmt->kind) {
     case Stmt_Kind_ASSIGN: {
-      // TODO(lvl5):  if struct, right should also be no deref
+      // TODO(lvl5):  if assigning struct, right should also be no deref
       bc_emit_expr(e, stmt->assign.right);
       bc_emit_expr(e, stmt->assign.left);
       assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
@@ -867,6 +905,8 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
               
               default: assert(false);
             }
+          } else if (type->kind == Type_Kind_PTR) {
+            bc_instruction(e, I_STORE_i64, NULL_PARAM);
           } else {
             assert(false);
           }
@@ -897,6 +937,16 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
     } break;
     case Stmt_Kind_BLOCK: {
       bc_emit_stmt_block(e, &stmt->block);
+    } break;
+    case Stmt_Kind_WHILE: {
+      i32 begin_pos = e->instruction_count;
+      bc_emit_expr(e, stmt->while_s.cond);
+      
+      i32 jmp_to_end_index = e->instruction_count;
+      Bc_Instruction *jmp_to_end = bc_instruction(e, I_JMP_FALSE, NULL_PARAM);
+      bc_emit_stmt(e, stmt->while_s.body);
+      bc_instruction(e, I_JMP, PARAM(i64, begin_pos - e->instruction_count));
+      jmp_to_end->param._i64 = e->instruction_count - jmp_to_end_index;
     } break;
     case Stmt_Kind_FOR: {
       assert(false);
@@ -968,10 +1018,8 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
       if (e->current_func->foreign) {
         char *library_name = tcstring(e->current_func->module);
         void *library = LoadLibraryA(library_name);
-        u64 proc = (u64)GetProcAddress(library, tcstring(decl->name));
-        // NOTE(lvl5): setting the highest bit of the address to signify that it's foreign
-        proc |= 1LL << 63;
-        
+        u64 proc = (u64)GetProcAddress(library, tcstring(e->current_func->foreign_name));
+        proc |= FOREIGN_FUNCTION_PTR_BIT;
         *(u64 *)(e->bss_segment + decl->offset) = proc;
       } else {
         *(u64 *)(e->bss_segment + decl->offset) = (u64)(e->instructions + e->instruction_count);
@@ -986,13 +1034,17 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
     } break;
     
     case Code_Kind_EXPR: {
-      bc_emit_expr(e, &decl->value->expr);
-      if (decl->is_const) {
-        bc_instruction(e, I_CONST_BSS, PARAM(i64, decl->offset));
-      } else {
-        bc_instruction(e, I_CONST_STACK, PARAM(i64, decl->offset));
+      if (decl->value->expr.kind != Expr_Kind_TYPE) {
+        bc_emit_expr(e, &decl->value->expr);
+        if (decl->is_const) {
+          // TODO(lvl5): this is wrong. we do have constant expressions
+          // on the stack and mutable in the BSS
+          bc_instruction(e, I_CONST_BSS, PARAM(i64, decl->offset));
+        } else {
+          bc_instruction(e, I_CONST_STACK, PARAM(i64, decl->offset));
+        }
+        bc_instruction(e, I_STORE_i32, NULL_PARAM);
       }
-      bc_instruction(e, I_STORE_i32, NULL_PARAM);
     } break;
     
     default: assert(false);
