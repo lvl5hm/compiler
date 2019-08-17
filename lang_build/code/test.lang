@@ -10,6 +10,8 @@ __string_const :: func(data: *i8, count: u64) string {
   return result;
 }
 
+print_char :: func(c: i8) #foreign putchar "ucrtbase.dll";
+
 string_print :: func(s: string) {
   i: u64 = 0;
   while i < s.count {
@@ -19,7 +21,7 @@ string_print :: func(s: string) {
 }
 
 main :: func() {
-  string_print("Hello world!");
+  foo := "Hello world!";
+  string_print(foo);
 }
 
-print_char :: func(c: i8) #foreign putchar "ucrtbase.dll";

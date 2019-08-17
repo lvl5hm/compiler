@@ -39,12 +39,10 @@ typedef enum {
   
   I_LOAD,
   
-  I_STORE_i8,
-  I_STORE_i16,
-  I_STORE_i32,
-  I_STORE_i64,
-  I_STORE_f32,
-  I_STORE_f64,
+  I_STORE_8,
+  I_STORE_16,
+  I_STORE_32,
+  I_STORE_64,
   
   I_GT_int,
   I_GT_f32,
@@ -115,12 +113,10 @@ char *Instruction_Kind_To_String[] = {
   
   [I_LOAD] = "LOAD",
   
-  [I_STORE_i8] = "STORE_i8",
-  [I_STORE_i16] = "STORE_i16",
-  [I_STORE_i32] = "STORE_i32",
-  [I_STORE_i64] = "STORE_i64",
-  [I_STORE_f32] = "STORE_f32",
-  [I_STORE_f64] = "STORE_f64",
+  [I_STORE_8] = "STORE_8",
+  [I_STORE_16] = "STORE_16",
+  [I_STORE_32] = "STORE_32",
+  [I_STORE_64] = "STORE_64",
   
   [I_GT_int] = "GT_int",
   [I_GT_f32] = "GT_f32",
@@ -172,12 +168,12 @@ typedef struct {
 
 struct Bc_Emitter {
   Bc_Instruction *instructions;
-  u32 instruction_count;
+  i64 instruction_count;
   
   byte *bss_segment;
   Code_Func *current_func;
   Parser *parser;
-  i32 entry_instruction_index;
+  i64 entry_instruction_index;
 };
 
 Bc_Instruction *bc_instruction(Bc_Emitter *e, Instruction_Kind kind, Bc_Param param) {
@@ -231,7 +227,13 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
           if (arg_count < 4) arg_count = 4;
           
           Bc_Param *args = sb_new(scratch_arena, Bc_Param, arg_count);
-          i32 stack_offset = 8; // for return value
+          
+          Code_Type *return_type = get_final_type(func->return_type);
+          i32 return_size = 0;
+          if (return_type != builtin_void) {
+            return_size = get_size_of_type(func->return_type);
+          }
+          i32 stack_offset = return_size; // for return value
           
           for (u32 arg_index = 0; arg_index < sb_count(func->params); arg_index++) {
             Code_Stmt_Decl *param = func->params[arg_index];
@@ -250,7 +252,32 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
           // the first 4 args in the array need to point to valid memory
           // and arg_count has to be >=4
           Bc_Param result = call_foreign(address._ptr, args, arg_count);
-          *(Bc_Param *)(stack + 0) = result;
+          
+          if (return_type != builtin_void) {
+            void *dst = stack + 0;
+            switch (return_size) {
+              case 1:
+              *(i8 *)dst = result._i8;
+              break;
+              case 2:
+              *(i16 *)dst = result._i16;
+              break;
+              case 4:
+              *(i32 *)dst = result._i32;
+              break;
+              case 8:
+              *(i64 *)dst = result._i64;
+              break;
+              
+              default:
+              copy_memory_slow(dst, result._ptr, return_size);
+              break;
+            }
+            
+          }
+          
+          // NOTE(lvl5): pop the return address off the exec, we don't need it
+          exec_count--;
         } else {
           instr = (Bc_Instruction *)address._u64;
           continue;
@@ -340,48 +367,33 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         exec[exec_count++] = (Bc_Param){ ._f64 = left._f64 + right._f64 };
       } break;
       
-      case I_STORE_i8: {
+      case I_STORE_8: {
         Bc_Param address = exec[--exec_count];
         Bc_Param value = exec[--exec_count];
         i8 *loc = (i8 *)(address._u64);
         *loc = value._i8;
       } break;
       
-      case I_STORE_i16: {
+      case I_STORE_16: {
         Bc_Param address = exec[--exec_count];
         Bc_Param value = exec[--exec_count];
         i16 *loc = (i16 *)(address._u64);
         *loc = value._i16;
       } break;
       
-      case I_STORE_i32: {
+      case I_STORE_32: {
         Bc_Param address = exec[--exec_count];
         Bc_Param value = exec[--exec_count];
         i32 *loc = (i32 *)(address._u64);
         *loc = value._i32;
       } break;
       
-      case I_STORE_i64: {
+      case I_STORE_64: {
         Bc_Param address = exec[--exec_count];
         Bc_Param value = exec[--exec_count];
         i64 *loc = (i64 *)(address._u64);
         *loc = value._i64;
       } break;
-      
-      case I_STORE_f32: {
-        Bc_Param address = exec[--exec_count];
-        Bc_Param value = exec[--exec_count];
-        f32 *loc = (f32 *)(address._u64);
-        *loc = value._f32;
-      } break;
-      
-      case I_STORE_f64: {
-        Bc_Param address = exec[--exec_count];
-        Bc_Param value = exec[--exec_count];
-        f64 *loc = (f64 *)(address._u64);
-        *loc = value._f64;
-      } break;
-      
       
       case I_HLT: {
         is_running = false;
@@ -550,6 +562,7 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         Bc_Param right = exec[--exec_count];
         if (right._i64) {
           instr += right._i64;
+          continue;
         }
       } break;
       
@@ -558,17 +571,19 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
         Bc_Param offset = instr->param;
         if (!right._i64) {
           instr += offset._i64;
+          continue;
         }
       } break;
       
       case I_JMP: {
         Bc_Param offset = instr->param;
         instr += offset._i64;
+        continue;
       } break;
       
       case I_MEMCOPY: {
-        Bc_Param from = exec[--exec_count];
         Bc_Param to = exec[--exec_count];
+        Bc_Param from = exec[--exec_count];
         Bc_Param size = instr->param;
         copy_memory_slow((byte *)to._u64, (byte *)from._u64, size._u64);
       } break;
@@ -602,6 +617,7 @@ void bytecode_print(Bc_Emitter *e) {
       case I_JMP_FALSE:
       case I_JMP:
       case I_STACK_CHANGE:
+      case I_MEMCOPY:
       printf(" %lld", instr.param._i64);
       break;
       
@@ -610,7 +626,6 @@ void bytecode_print(Bc_Emitter *e) {
       case I_MUL_f64:
       case I_DIV_f64:
       case I_NEG_f64:
-      case I_STORE_f64:
       case I_GT_f64:
       case I_GTE_f64:
       case I_ADD_f32:
@@ -618,14 +633,12 @@ void bytecode_print(Bc_Emitter *e) {
       case I_MUL_f32:
       case I_DIV_f32:
       case I_NEG_f32:
-      case I_STORE_f32:
       case I_GT_f32:
       case I_GTE_f32:
       case I_CAST_f32_f64:
       case I_CAST_f64_f32:
       case I_CAST_f64_int:
       case I_CAST_f32_int:
-      case I_MEMCOPY:
       case I_HLT:
       case I_ADD_int:
       case I_SUB_int:
@@ -641,10 +654,10 @@ void bytecode_print(Bc_Emitter *e) {
       case I_OR:
       case I_NOT:
       case I_LOAD:
-      case I_STORE_i8:
-      case I_STORE_i16:
-      case I_STORE_i32:
-      case I_STORE_i64:
+      case I_STORE_8:
+      case I_STORE_16:
+      case I_STORE_32:
+      case I_STORE_64:
       case I_GT_int:
       case I_GTE_int:
       case I_EQ:
@@ -669,23 +682,52 @@ void bytecode_print(Bc_Emitter *e) {
 
 void bc_emit_expr(Bc_Emitter *, Code_Expr *);
 
+void bc_store_size(Bc_Emitter *e, i32 size) {
+  switch (size) {
+    case 1:
+    bc_instruction(e, I_STORE_8, NULL_PARAM);
+    break;
+    
+    case 2:
+    bc_instruction(e, I_STORE_16, NULL_PARAM);
+    break;
+    
+    case 4:
+    bc_instruction(e, I_STORE_32, NULL_PARAM);
+    break;
+    
+    case 8:
+    bc_instruction(e, I_STORE_64, NULL_PARAM);
+    break;
+    
+    default:
+    bc_instruction(e, I_MEMCOPY, PARAM(i64, size));
+    break;
+  }
+};
+
+
 void bc_emit_func_call(Bc_Emitter *e, Code_Expr_Call *call) {
   Code_Type_Func *func = &call->func->type->func;
   
   i32 total_args_size = 0;
-  if (func->return_type != builtin_void) {
-    total_args_size += 8; // a pointer to the return value is first
-    // on the called function sstack
+  b32 is_void = get_final_type(func->return_type) != builtin_void;
+  if (is_void) {
+    total_args_size += get_size_of_type(func->return_type);
   }
   
   for (u32 i = 0; i < sb_count(call->args); i++) {
     Code_Expr *arg = call->args[i];
+    i32 size = get_size_of_type(arg->type);
     
     bc_emit_expr(e, arg);
+    if (size > 8) {
+      assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
+      e->instruction_count--;
+    }
     bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size + total_args_size));
-    bc_instruction(e, I_STORE_i32, NULL_PARAM);
+    bc_store_size(e, size);
     
-    i32 size = get_size_of_type(arg->type);
     total_args_size += size;
   }
   
@@ -698,7 +740,7 @@ void bc_emit_func_call(Bc_Emitter *e, Code_Expr_Call *call) {
   
   bc_instruction(e, I_STACK_CHANGE, PARAM(i64, -e->current_func->stack_size));
   
-  if (func->return_type != builtin_void) {
+  if (is_void) {
     // load the return value into the exec stack
     bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size));
     bc_instruction(e, I_LOAD, NULL_PARAM);
@@ -806,39 +848,27 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
       if (expr->cast.implicit) {
         bc_emit_expr(e, expr->cast.expr);
       } else {
-        assert(false);
+        // TODO(lvl5): actual casts
+        bc_emit_expr(e, expr->cast.expr);
       }
     } break;
     case Expr_Kind_CHAR: {
       bc_instruction(e, I_CONST, PARAM(i64, expr->char_e.value));
     } break;
     case Expr_Kind_INT: {
+      Placeholder *pl = expr->int_e.placeholder;
+      if (pl) {
+        assert(pl->storage_kind == Storage_Kind_BSS);
+        byte *dst = e->bss_segment + pl->offset;
+        copy_memory_slow(dst, pl->data, pl->size);
+        expr->int_e.value = (u64)dst;
+      }
       bc_instruction(e, I_CONST, PARAM(i64, expr->int_e.value));
     } break;
     case Expr_Kind_FLOAT: {
       bc_instruction(e, I_CONST, PARAM(f64, expr->float_e.value));
     } break;
     case Expr_Kind_STRING: {
-      // store the string in the bss
-      char *data = (char *)(e->bss_segment + expr->string.offset);
-      copy_memory_slow(data,
-                       expr->string.value.data, expr->string.value.count);
-      // call the __string_const function
-      // TODO(lvl5): should this be done in the typechecker?
-      Code_Expr **args = sb_new(e->parser->arena, Code_Expr *, 2);
-      Code_Expr *ptr = (Code_Expr *)code_expr_int(e->parser, (u64)data, 64);
-      ptr->type = (Code_Type *)code_type_pointer(e->parser, builtin_i8);
-      
-      Code_Expr *count = (Code_Expr *)code_expr_int(e->parser, expr->string.value.count, 64);
-      count->type = builtin_u64;
-      
-      sb_push(args, ptr);
-      sb_push(args, count);
-      //Code_Expr_Call *string_const_call = code_expr_call(e->parser, );
-      //bc_emit_func_call(
-      
-      // deal with returning and assigning structs
-      
       assert(false);
     } break;
     case Expr_Kind_NULL: {
@@ -869,51 +899,8 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
       bc_emit_expr(e, stmt->assign.left);
       assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
       e->instruction_count--;
-      
-      switch (stmt->assign.op) {
-        case T_ASSIGN: {
-          Code_Type *type = get_final_type(stmt->assign.left->type);
-          if (type->kind == Type_Kind_INT) {
-            switch (type->int_t.size) {
-              case 1:
-              bc_instruction(e, I_STORE_i8, NULL_PARAM);
-              break;
-              
-              case 2:
-              bc_instruction(e, I_STORE_i16, NULL_PARAM);
-              break;
-              
-              case 4:
-              bc_instruction(e, I_STORE_i32, NULL_PARAM);
-              break;
-              
-              case 8:
-              bc_instruction(e, I_STORE_i64, NULL_PARAM);
-              break;
-              
-              default: assert(false);
-            }
-          } else if (type->kind == Type_Kind_FLOAT) {
-            switch (type->float_t.size) {
-              case 4:
-              bc_instruction(e, I_STORE_f32, NULL_PARAM);
-              break;
-              
-              case 8:
-              bc_instruction(e, I_STORE_f64, NULL_PARAM);
-              break;
-              
-              default: assert(false);
-            }
-          } else if (type->kind == Type_Kind_PTR) {
-            bc_instruction(e, I_STORE_i64, NULL_PARAM);
-          } else {
-            assert(false);
-          }
-        } break;
-        
-        default: assert(false);
-      }
+      i32 size = get_size_of_type(stmt->assign.left->type);
+      bc_store_size(e, size);
     } break;
     case Stmt_Kind_EXPR: {
       bc_emit_expr(e, stmt->expr.expr);
@@ -921,12 +908,12 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
     case Stmt_Kind_IF: {
       bc_emit_expr(e, stmt->if_s.cond);
       Bc_Instruction *then_jmp = bc_instruction(e, I_JMP_FALSE, NULL_PARAM);
-      i32 then_count = e->instruction_count;
+      i64 then_count = e->instruction_count;
       
       bc_emit_stmt(e, stmt->if_s.then_branch);
       if (stmt->if_s.else_branch) {
         Bc_Instruction *else_jmp = bc_instruction(e, I_JMP, NULL_PARAM);
-        i32 else_count = e->instruction_count;
+        i64 else_count = e->instruction_count;
         
         then_jmp->param._i64 = e->instruction_count - then_count+1;
         bc_emit_stmt(e, stmt->if_s.else_branch);
@@ -939,10 +926,10 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
       bc_emit_stmt_block(e, &stmt->block);
     } break;
     case Stmt_Kind_WHILE: {
-      i32 begin_pos = e->instruction_count;
+      i64 begin_pos = e->instruction_count;
       bc_emit_expr(e, stmt->while_s.cond);
       
-      i32 jmp_to_end_index = e->instruction_count;
+      i64 jmp_to_end_index = e->instruction_count;
       Bc_Instruction *jmp_to_end = bc_instruction(e, I_JMP_FALSE, NULL_PARAM);
       bc_emit_stmt(e, stmt->while_s.body);
       bc_instruction(e, I_JMP, PARAM(i64, begin_pos - e->instruction_count));
@@ -957,9 +944,16 @@ void bc_emit_stmt(Bc_Emitter *e, Code_Stmt *stmt) {
           // TODO(lvl5): if is entry, I_HLT instead
           if (stmt->keyword.stmt) {
             assert(stmt->keyword.stmt->kind == Stmt_Kind_EXPR);
-            bc_emit_expr(e, stmt->keyword.stmt->expr.expr);
-            bc_instruction(e, I_CONST_STACK, PARAM(i64, 0));
-            bc_instruction(e, I_STORE_i64, NULL_PARAM);
+            Code_Expr *expr = stmt->keyword.stmt->expr.expr;
+            bc_emit_expr(e, expr);
+            i32 size = get_size_of_type(expr->type);
+            if (size > 8) {
+              //assert(get_final_type(expr->type)-> == Type_Kind_STRUCT);
+              assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
+              e->instruction_count--;
+            }
+            bc_instruction(e, I_CONST_STACK, NULL_PARAM);
+            bc_store_size(e, size);
           }
           bc_instruction(e, I_RET, NULL_PARAM);
         } break;
@@ -1035,15 +1029,22 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
     
     case Code_Kind_EXPR: {
       if (decl->value->expr.kind != Expr_Kind_TYPE) {
+        i32 size = get_size_of_type(decl->type);
         bc_emit_expr(e, &decl->value->expr);
-        if (decl->is_const) {
+        if (size > 8) {
+          assert(e->instructions[e->instruction_count-1].kind == I_LOAD);
+          e->instruction_count--;
+        }
+        
+        if (decl->storage_kind == Storage_Kind_BSS) {
           // TODO(lvl5): this is wrong. we do have constant expressions
           // on the stack and mutable in the BSS
           bc_instruction(e, I_CONST_BSS, PARAM(i64, decl->offset));
-        } else {
+        } else if (decl->storage_kind == Storage_Kind_STACK) {
           bc_instruction(e, I_CONST_STACK, PARAM(i64, decl->offset));
         }
-        bc_instruction(e, I_STORE_i32, NULL_PARAM);
+        
+        bc_store_size(e, size);
       }
     } break;
     

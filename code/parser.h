@@ -62,6 +62,10 @@ typedef struct {
 } Code_Type_Int;
 
 typedef struct {
+  i32 _;
+} Code_Type_Void;
+
+typedef struct {
   i32 size;
 } Code_Type_Float;
 
@@ -75,6 +79,7 @@ typedef enum {
   Type_Kind_ALIAS,
   Type_Kind_INT,
   Type_Kind_FLOAT,
+  Type_Kind_VOID,
 } Type_Kind;
 
 struct Code_Type {
@@ -120,9 +125,25 @@ typedef struct {
   b32 implicit;
 } Code_Expr_Cast;
 
+
+typedef enum {
+  Storage_Kind_NONE,
+  //Storage_Kind_FUNC,
+  Storage_Kind_BSS,
+  Storage_Kind_STACK,
+} Storage_Kind;
+
+typedef struct {
+  Storage_Kind storage_kind;
+  i32 offset;
+  void *data;
+  i32 size;
+} Placeholder;
+
 typedef struct {
   u64 value;
   i32 size;
+  Placeholder *placeholder;
 } Code_Expr_Int;
 
 typedef struct {
@@ -234,13 +255,6 @@ typedef enum {
   Resolve_State_PARTIAL,
   Resolve_State_FULL,
 } Resolve_State;
-
-typedef enum {
-  Storage_Kind_NONE,
-  Storage_Kind_FUNC,
-  Storage_Kind_BSS,
-  Storage_Kind_STACK,
-} Storage_Kind;
 
 struct Code_Stmt_Decl {
   String name;
@@ -438,6 +452,13 @@ Code_Type_Alias *code_type_alias(Parser *p, String alias) {
   node->expr.type_e.kind = Type_Kind_ALIAS;
   node->expr.type_e.alias.name = alias;
   return (Code_Type_Alias *)node;
+}
+
+Code_Type_Void *code_type_void(Parser *p) {
+  Code_Node *node = code_node(p, Code_Kind_EXPR);
+  node->expr.kind = Expr_Kind_TYPE;
+  node->expr.type_e.kind = Type_Kind_VOID;
+  return (Code_Type_Void *)node;
 }
 
 Code_Func *code_func(Parser *p, Code_Type_Func *sig, Code_Stmt_Block *body, b32 foreign) {

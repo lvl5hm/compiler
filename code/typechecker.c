@@ -98,6 +98,14 @@ Scope *get_global_scope(Scope *child) {
   return result;
 }
 
+void resolver_bss_push(Resolver res, i32 size) {
+  res.common->bss_position += size;
+  
+  i32 mod = size % 8;
+  if (mod) {
+    res.common->bss_position += 8 - mod;
+  }
+}
 
 Code_Type *get_final_type(Code_Type *type) {
   Code_Type *result = type;
@@ -106,7 +114,8 @@ Code_Type *get_final_type(Code_Type *type) {
           result->alias.base->kind == Type_Kind_FUNC ||
           result->alias.base->kind == Type_Kind_ENUM ||
           result->alias.base->kind == Type_Kind_INT ||
-          result->alias.base->kind == Type_Kind_FLOAT)) {
+          result->alias.base->kind == Type_Kind_FLOAT ||
+          result->alias.base->kind == Type_Kind_VOID)) {
     // TODO(lvl5): there can be problems with scopes and type alias shadowing
     result = result->alias.base;
   }
@@ -462,6 +471,8 @@ Code_Type *get_builtin_type(Scope *scope, String name) {
 
 void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
   switch (type->kind) {
+    case Type_Kind_VOID: {
+    } break;
     case Type_Kind_ENUM: {
       Scope *child_scope = alloc_scope(res.common->parser->arena, scope);
       type->enum_t.scope = child_scope;
@@ -795,8 +806,33 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       resolve_name(res, scope, const_string("__string_const"), Resolve_State_FULL);
       expr->type = builtin_string;
       // NOTE(lvl5): allocate space on the bss
-      expr->string.offset = res.common->bss_position;
-      res.common->bss_position += expr->string.value.count + 1;
+      Placeholder *placeholder = arena_push_struct(res.common->parser->arena, Placeholder);
+      placeholder->storage_kind = Storage_Kind_BSS,
+      placeholder->offset = res.common->bss_position,
+      placeholder->data = expr->string.value.data,
+      placeholder->size = expr->string.value.count,
+      
+      resolver_bss_push(res, expr->string.value.count + 1);
+      
+      Parser *p = res.common->parser;
+      
+      Code_Expr **args = sb_new(p->arena, Code_Expr *, 2);
+      Code_Expr_Int *ptr_value = code_expr_int(p, U64_MAX, 64);
+      ptr_value->placeholder = placeholder;
+      
+      Code_Type *cast_type = (Code_Type *)code_type_pointer
+        (p, (Code_Type *)code_type_alias(p, const_string("i8")));
+      Code_Expr *ptr = (Code_Expr *)code_expr_cast(p, cast_type, (Code_Expr *)ptr_value, true);
+      
+      Code_Expr *count = (Code_Expr *)code_expr_int(p, expr->string.value.count, 64);
+      
+      Code_Expr *func_name = (Code_Expr *)code_expr_name(p, const_string("__string_const"));
+      sb_push(args, ptr);
+      sb_push(args, count);
+      
+      Code_Expr *call = (Code_Expr *)code_expr_call(p, func_name, args);
+      *expr = *call;
+      resolve_expr(res, scope, expr);
     } break;
     case Expr_Kind_NAME: {
       resolve_name(res, scope, expr->name.name, Resolve_State_FULL);
@@ -902,12 +938,13 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
           
           child_res.context_arg = (Code_Expr *)code_expr_name(res.common->parser, const_string("ctx"));
           
-          i32 old_stack_position = res.common->stack_position;
-          child_res.common->stack_position = 0;
           
           if (!func->foreign) {
-            if (func->type->return_type != builtin_void) {
-              res.common->stack_position += 8;
+            i32 old_stack_position = res.common->stack_position;
+            child_res.common->stack_position = 0;
+            
+            if (get_final_type(func->type->return_type) != builtin_void) {
+              res.common->stack_position += get_size_of_type(func->type->return_type);
             }
             
             for (u32 i = 0; i < sb_count(func->type->params); i++) {
@@ -921,10 +958,10 @@ void resolve_decl_full(Resolver res, Scope *scope, Code_Stmt_Decl *decl) {
             }
             
             resolve_stmt_block(child_res, child_scope, func->body, /* is_func_body */ true);
+            
+            child_res.current_func->stack_size = res.common->stack_position;
+            res.common->stack_position = old_stack_position;
           }
-          
-          child_res.current_func->stack_size = res.common->stack_position;
-          res.common->stack_position = old_stack_position;
         } break;
         
         default: assert(false);
@@ -950,25 +987,26 @@ void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Res
       
       default: assert(false);
     }
-  }
-  
-  if (decl->type != builtin_Type) {
-    decl->storage_kind = Storage_Kind_BSS;
-    decl->offset = res.common->bss_position;
-    res.common->bss_position += get_size_of_type(decl->type);
-  }
-  
-  if (sb_count(res.common->parser->errors) > 0) {
-    for (u32 i = 0; i < sb_count(res.common->parser->errors); i++) {
-      printf("Type error: %s\n\n", tcstring(res.common->parser->errors[i]));
+    
+    if (decl->type != builtin_Type) {
+      assert(decl->storage_kind == Storage_Kind_NONE);
+      decl->storage_kind = Storage_Kind_BSS;
+      decl->offset = res.common->bss_position;
+      resolver_bss_push(res, get_size_of_type(decl->type));
     }
-  } else {
-    bc_emit_decl(res.common->bc_emitter, decl, Resolve_State_FULL);
+    
+    if (sb_count(res.common->parser->errors) > 0) {
+      for (u32 i = 0; i < sb_count(res.common->parser->errors); i++) {
+        printf("Type error: %s\n\n", tcstring(res.common->parser->errors[i]));
+      }
+    } else {
+      bc_emit_decl(res.common->bc_emitter, decl, Resolve_State_FULL);
 #if 0
-    if (decl->emit_state < state) {
-      emit_top_decl(res.emitter, decl, state);
-    }
+      if (decl->emit_state < state) {
+        emit_top_decl(res.emitter, decl, state);
+      }
 #endif
+    }
   }
 }
 

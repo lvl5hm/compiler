@@ -99,8 +99,6 @@ void builder_to_file(String file_name, String_Builder *builder) {
   for (String_Builder_Block *block = &builder->first; block; block = block->next) {
     u64 size = block == builder->cur ? builder->count_in_block : STRING_BUILDER_BLOCK_MAX;
     fwrite(block->data, size, 1, file);
-    
-    int foo = 43;
   }
   fclose(file);
 }
@@ -140,7 +138,7 @@ int main() {
   builtin_Type = (Code_Type *)code_type_alias(p, const_string("Type"));
   scope_add(global_scope, code_stmt_decl(p, const_string("Type"), builtin_Type, (Code_Node *)builtin_Type, true));
   
-  builtin_void = (Code_Type *)code_type_alias(p, const_string("void"));
+  builtin_void = (Code_Type *)code_type_void(p);
   scope_add(global_scope, code_stmt_decl(p, const_string("void"), builtin_Type,
                                          (Code_Node *)builtin_void, true));
   
