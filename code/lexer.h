@@ -309,6 +309,7 @@ Token *tokenize(Arena *arena, String src) {
       } break;
       case '"': {
         eat();
+        // TODO(lvl5): deal with escape sequences
         while ((*stream != '"') ||
                (*(stream-1) == '\\')) {
           eat();

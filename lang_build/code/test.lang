@@ -1,3 +1,39 @@
+byte :: u8;
+b32 :: i32;
+b8 :: i8;
+
+Alloc_Op :: enum {
+  ALLOC;
+  REALLOC;
+  FREE;
+  FREE_ALL;
+}
+
+Allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *void, old_size: u64, align: u64) *byte;
+
+Arena :: struct {
+  data:     *byte;
+  capacity: u64;
+  size:     u64;
+}
+
+arena_make :: func(data: *void, capacity: u64) Arena {
+  result: Arena;
+  result.data = (*byte)(data);
+  result.capacity = capacity;
+  return result;
+}
+
+Context :: struct {
+  allocator:      Allocator;
+  allocator_data: *void;
+  scratch:        Arena;
+}
+
+
+
+
+
 string :: struct {
   data:  *i8;
   count: u64;
@@ -11,6 +47,7 @@ __string_const :: func(data: *i8, count: u64) string {
 }
 
 print_char :: func(c: i8) #foreign putchar "ucrtbase.dll";
+puts :: func(str: *i8) #foreign puts  "ucrtbase.dll";
 
 string_print :: func(s: string) {
   i: u64 = 0;
@@ -21,7 +58,15 @@ string_print :: func(s: string) {
 }
 
 main :: func() {
+  ctx.scratch.size = 25;
+  if ctx.scratch.size == 25
+    string_print("stop this madness");
+  
   foo := "Hello world!";
-  string_print(foo);
+  if foo.count > 20 {
+    puts(foo.data);
+  } else {
+    
+  }
 }
 

@@ -830,6 +830,12 @@ void bc_emit_expr(Bc_Emitter *e, Code_Expr *expr) {
           bc_instruction(e, I_GT_int, NULL_PARAM);
         } break;
         
+        case T_EQUALS: {
+          bc_emit_expr(e, expr->binary.left);
+          bc_emit_expr(e, expr->binary.right);
+          bc_instruction(e, I_EQ, NULL_PARAM);
+        } break;
+        
         case T_LESS: {
           bc_emit_expr(e, expr->binary.right);
           bc_emit_expr(e, expr->binary.left);
@@ -1012,7 +1018,10 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
       if (e->current_func->foreign) {
         char *library_name = tcstring(e->current_func->module);
         void *library = LoadLibraryA(library_name);
-        u64 proc = (u64)GetProcAddress(library, tcstring(e->current_func->foreign_name));
+        assert(library);
+        char *proc_name = tcstring(e->current_func->foreign_name);
+        u64 proc = (u64)GetProcAddress(library, proc_name);
+        assert(proc);
         proc |= FOREIGN_FUNCTION_PTR_BIT;
         *(u64 *)(e->bss_segment + decl->offset) = proc;
       } else {

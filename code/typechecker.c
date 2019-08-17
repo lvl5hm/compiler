@@ -19,7 +19,7 @@ Code_Type *builtin_void = 0;
 Code_Type *builtin_voidptr = 0;
 Code_Type *builtin_string = 0;
 
-#define ADD_CTX_PARAM false
+#define ADD_CTX_PARAM true
 
 
 char *tcstring(String str) {
@@ -805,13 +805,13 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
       resolve_name(res, scope, const_string("string"), Resolve_State_FULL);
       resolve_name(res, scope, const_string("__string_const"), Resolve_State_FULL);
       expr->type = builtin_string;
-      // NOTE(lvl5): allocate space on the bss
       Placeholder *placeholder = arena_push_struct(res.common->parser->arena, Placeholder);
-      placeholder->storage_kind = Storage_Kind_BSS,
-      placeholder->offset = res.common->bss_position,
-      placeholder->data = expr->string.value.data,
-      placeholder->size = expr->string.value.count,
+      placeholder->storage_kind = Storage_Kind_BSS;
+      placeholder->offset = res.common->bss_position;
+      placeholder->data = tcstring(expr->string.value);
+      placeholder->size = expr->string.value.count+1;
       
+      // NOTE(lvl5): allocate space on the bss
       resolver_bss_push(res, expr->string.value.count + 1);
       
       Parser *p = res.common->parser;
@@ -844,6 +844,7 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
         expr->kind = Expr_Kind_TYPE;
         expr->type_e.kind = Type_Kind_ALIAS;
         expr->type_e.alias.name = name;
+        expr->type_e.alias.base = &expr->name.decl->value->expr.type_e;
       }
       assert(expr->type);
     } break;

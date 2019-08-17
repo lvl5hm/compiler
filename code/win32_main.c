@@ -5,9 +5,9 @@
 
 /*
 TODO:
-[ ] add passing structs (or do they work already)
+[ ] aligning struct members
+[ ] aligning stack variables
 [ ] add ctx argument
-[ ] add while loops
 [ ] remove C-style for loops
 [ ] add looping over strings
 [ ] transform for loops AST into while loops
