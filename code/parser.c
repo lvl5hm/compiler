@@ -306,9 +306,6 @@ Code_Expr *parse_expr_atom(Parser *p) {
     result = inner;
   } else if (parser_accept(p, T_NAME)) {
     String name = parser_prev(p).value;
-    if (string_compare(name, const_string("main"))) {
-      name = const_string("__main");
-    }
     result = (Code_Expr *)code_expr_name(p, name);
   } else if (parser_accept(p, T_INT)) {
     u64 value = string_to_u64(parser_prev(p).value);
@@ -490,9 +487,6 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
   parser_expect(p, T_COLON);
   
   String name = t_name.value;
-  if (string_compare(name, const_string("main"))) {
-    name = const_string("__main");
-  }
   
   Code_Type *type = 0;
   Code_Node *value = 0;

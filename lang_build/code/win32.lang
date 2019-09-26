@@ -1,0 +1,95 @@
+
+win32_ATOM :: u16;
+win32_HMENU :: *void;
+win32_HINSTANCE :: *void;
+win32_HWND :: *void;
+win32_LRESULT :: *void;
+win32_WPARAM :: *void;
+win32_LPARAM :: *void;
+win32_HICON :: *void;
+win32_HCURSOR :: *void;
+win32_HBRUSH :: *void;
+
+win32_WNDPROC :: func(hwnd: win32_HWND,
+                      uMsg: u32,
+                      wParam: win32_WPARAM,
+                      lParam: win32_LPARAM) win32_LRESULT #callback;
+
+win32_WNDCLASSA :: struct {
+  style: u32;
+  lpfnWndProc: win32_WNDPROC;
+  cbClsExtra: i32;
+  cbWndExtra: i32;
+  hInstance: win32_HINSTANCE;
+  hIcon: win32_HICON;
+  hCursor: win32_HCURSOR;
+  hbrBackground: win32_HBRUSH;
+  lpszMenuName: *char;
+  lpszClassName: *char;
+}
+
+win32_RegisterClassA :: func(win32_WNDCLASSA *lpWndClass) win32_ATOM 
+#foreign RegisterClassA "User32.dll";
+
+win32_CreateWindowExA :: func(
+dwExStyle: u32,
+lpClassName: *char,
+lpWindowName: *char,
+dwStyle: u32,
+X: i32,
+Y: i32,
+nWidth: i32,
+nHeight: i32,
+hWndParent: win32_HWND,
+hMenu: win32_HMENU,
+hInstance: win32_HINSTANCE,
+lpParam: *void) win32_HWND #foreign CreateWindowExA "User32.dll";
+
+
+win32_DefWindowProcA: win32_WNDPROC: #foreign DefWindowProcA "User32.dll";
+
+
+win32_WindowProc: win32_WNDPROC: {
+  return win32_DefWindowProcA(hwnd, uMsg, wParam, lParam);
+}
+
+win32_CS_VREDRAW :: 0x0001;
+win32_CS_HREDRAW :: 0x0002;
+win32_CS_OWNDC   :: 0x0020;
+
+win32_WS_OVERLAPPED       :: 0x00000000L;
+win32_WS_CAPTION          :: 0x00C00000L;
+win32_WS_SYSMENU          :: 0x00080000L;
+win32_WS_THICKFRAME       :: 0x00040000L;
+win32_WS_MINIMIZEBOX      :: 0x00020000L;
+win32_WS_MAXIMIZEBOX      :: 0x00010000L;
+
+win32_WS_OVERLAPPEDWINDOW :: win32_WS_OVERLAPPED|win32_WS_CAPTION|win32_WS_SYSMENU|win32_WS_THICKFRAME|win32_WS_MINIMIZEBOX|win32_WS_MAXIMIZEBOX;
+
+
+window_create :: func(hInstance: win32_HINSTANCE, name: string) Window {
+  window_class: win32_WNDCLASSA;
+  window_class.style = win32_CS_HREDRAW|win32_CS_VREDRAW|win32_CS_OWNDC;
+  window_class.lpfnWndProc = win32_WindowProc;
+  window_class.cbClsExtra = 0;
+  window_class.cbWndExtra = 0;
+  window_class.hInstance = hInstance;
+  window_class.hIcon = null;
+  window_class.hCursor = null;
+  window_class.hbrBackground = null;
+  window_class.lpszMenuName = null;
+  window_class.lpszClassName = scratch_c_string("class name");
+  
+  win32_ATOM window_class_atom = win32_RegisterClassA(*window_class);
+  
+  win32_HWND hwnd = win32_CreateWindowExA(
+    null,
+    window_class.lpszClassName,
+    scratch_c_string("awesome window name"),
+    win32_WS_OVERLAPPEDWINDOW,
+    0, 0, 0, 0,
+    null,
+    null,
+    hInstance,,
+    null);
+}

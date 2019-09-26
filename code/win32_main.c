@@ -3,11 +3,21 @@
 #include "bytecode_emitter.c"
 #include "time.h"
 
+
 /*
 TODO:
+[ ] the problem: it makes sense to keep the type aliases, for loops, etc 
+for the C backend to keep the code clean and idiomatic. it makes sense to transform
+the code to make it as easy as possible for the bytecode backend
+we should probably make a more clear separation between compiler phases
+1) resolve parser ambigueties / build dependency graph?
+2) infer types / typecheck
+3) set sizes / locations
+4.1) transform ast for bytecode
+5.1) generate bytecode
+
 [ ] aligning struct members
 [ ] aligning stack variables
-[ ] add ctx argument
 [ ] remove C-style for loops
 [ ] add looping over strings
 [ ] transform for loops AST into while loops

@@ -112,7 +112,6 @@ Code_Type *get_final_type(Code_Type *type) {
   while (result->kind == Type_Kind_ALIAS && result->alias.base &&
          (result->alias.base->kind == Type_Kind_ALIAS ||
           result->alias.base->kind == Type_Kind_FUNC ||
-          result->alias.base->kind == Type_Kind_ENUM ||
           result->alias.base->kind == Type_Kind_INT ||
           result->alias.base->kind == Type_Kind_FLOAT ||
           result->alias.base->kind == Type_Kind_VOID)) {
@@ -177,6 +176,10 @@ b32 _check_types(Resolver res, Code_Type *a, Code_Type *b, b32 error) {
       } break;
       case Type_Kind_ALIAS: {
         result = string_compare(a->alias.name, b->alias.name);
+      } break;
+      
+      case Type_Kind_VOID: {
+        result = a == b && a == builtin_void;
       } break;
       
       default: assert(false);
@@ -294,39 +297,20 @@ Code_Expr *maybe_implicit_cast(Resolver res, Code_Expr *expr, Code_Type *to) {
   return result;
 }
 
-void append_deferred_statements(Resolver res, Scope *scope, Code_Stmt *stmt_insert_before, Scope *max_scope) {
+Code_Stmt_Multi *get_all_deferred_statements_until_this_point(Resolver res,
+                                                              Scope *scope, Scope *max_scope) {
+  Code_Stmt_Multi *result = 0;
   if (res.current_block) {
+    Code_Stmt **statements = sb_new(res.common->parser->arena, Code_Stmt *, 8);
     while (scope) {
       if (scope->deferred_statements) {
         u32 deferred_count = sb_count(scope->deferred_statements);
         u32 all_count = sb_count(res.current_block->statements);
         if (deferred_count) {
-          for (u32 i = 0; i < deferred_count; i++) 
-            sb_push(res.current_block->statements, null);
-          
-          // TODO(lvl5): if foo return
-          // needs to add a block around return
-          // should all ifs have an implicit block?
-          
-          b32 self_index = all_count;
-          
-          if (stmt_insert_before) {
-            // NOTE(lvl5): if stmt_insert_before is specified, we need
-            // to find it's index and move it and all statements after
-            // it
-            self_index = -1;
-            for (u32 i = 0; i < all_count; i++) {
-              Code_Stmt *item = res.current_block->statements[i];
-              if (item == stmt_insert_before) {
-                self_index = i;
-              }
-              if (self_index != -1) {
-                res.current_block->statements[i+deferred_count] = item;
-              }
-            }
-          }
-          for (u32 i = 0; i < deferred_count; i++) {
-            res.current_block->statements[self_index+i] = scope->deferred_statements[deferred_count-i-1];
+          for (u32 def_index = deferred_count-1;
+               def_index >= 0; 
+               def_index++) {
+            sb_push(statements, scope->deferred_statements[def_index]);
           }
         }
       }
@@ -336,7 +320,9 @@ void append_deferred_statements(Resolver res, Scope *scope, Code_Stmt *stmt_inse
       }
       scope = scope->parent;
     }
+    result = code_stmt_multi(res.common->parser, statements);
   }
+  return result;
 }
 
 i32 get_size_of_type(Code_Type *type) {
@@ -355,6 +341,8 @@ i32 get_size_of_type(Code_Type *type) {
     result = 8;
   } else if (type->kind == Type_Kind_PTR) {
     result = 8;
+  } else if (type->kind == Type_Kind_ENUM) {
+    result = get_size_of_type(type->enum_t.item_type);
   } else {
     assert(false);
   }
@@ -420,7 +408,11 @@ void resolve_stmt(Resolver res, Scope *scope, Code_Stmt *stmt) {
           stmt->keyword.stmt->expr.expr = maybe_implicit_cast(res, stmt->keyword.stmt->expr.expr, res.current_func->type->return_type);
           check_types(res, stmt->keyword.stmt->expr.expr->type, res.current_func->type->return_type);
           
-          append_deferred_statements(res, scope, stmt, res.current_block->scope);
+          Code_Stmt_Multi *deferred = get_all_deferred_statements_until_this_point(res, scope, res.current_block->scope);
+          if (deferred) {
+            sb_push(deferred->statements, stmt);
+          }
+          *(Code_Node *)stmt = *(Code_Node *)deferred;
         } break;
         
         case T_PUSH_CONTEXT: {
@@ -453,21 +445,17 @@ void resolve_stmt_block(Resolver res, Scope *scope, Code_Stmt_Block *block, b32 
   }
   Resolver child_res = res;
   child_res.current_block = block;
-  // TODO(lvl5): currently we are inserting new statements inside the loop
+  
   u32 count = sb_count(block->statements);
   for (u32 i = 0; i < count; i++) {
     Code_Stmt *stmt = block->statements[i];
     resolve_stmt(child_res, child_scope, stmt);
   }
   
-  // TODO(lvl5): if we ever do analysis and we are sure that all codepaths return a value, we can get rid of defers at the end of the function
-  append_deferred_statements(child_res, child_scope, null, child_scope);
+  Code_Stmt_Multi *deferred = get_all_deferred_statements_until_this_point(child_res, child_scope, child_scope);
+  sb_push(block->statements, (Code_Stmt *)deferred);
 }
 
-Code_Type *get_builtin_type(Scope *scope, String name) {
-  Code_Type *result = (Code_Type *)scope_get(get_global_scope(scope), name)->decl->value;
-  return result;
-}
 
 void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
   switch (type->kind) {
@@ -478,12 +466,11 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
       type->enum_t.scope = child_scope;
       for (u32 i = 0; i < sb_count(type->enum_t.members); i++) {
         String member = type->enum_t.members[i];
-        // TODO(lvl5): specify type of enum values
         scope_add(child_scope,
-                  code_stmt_decl(res.common->parser, member, builtin_i32,
+                  code_stmt_decl(res.common->parser, member, type,
                                  (Code_Node *)code_expr_int(res.common->parser, i, 31), true));
       }
-      type->enum_t.item_type = builtin_i32;
+      type->enum_t.item_type = builtin_i64;
     } break;
     
     case Type_Kind_STRUCT: {
@@ -522,6 +509,10 @@ void resolve_type(Resolver res, Scope *scope, Code_Type *type) {
       } else {
         resolve_name(res, scope, type->alias.name, Resolve_State_FULL);
       }
+      if (string_compare(type->alias.name, const_string("Alloc_Op"))) {
+        __debugbreak();
+      }
+      
       Code_Node *base_node = scope_get(scope, type->alias.name)->decl->value;
       assert(base_node->kind == Code_Kind_EXPR);
       assert(base_node->expr.kind == Expr_Kind_TYPE);
@@ -655,21 +646,23 @@ void resolve_expr(Resolver res, Scope *scope, Code_Expr *expr) {
           expr->binary.is_enum_member = true;
           String enum_alias = expr->binary.left->type_e.alias.name;
           Code_Type *left_base = &scope_get(scope, enum_alias)->decl->value->expr.type_e;
+          assert(left_base->kind == Type_Kind_ENUM);
+          
           Code_Type_Enum *enum_t = &left_base->enum_t;
           Scope *enum_scope = enum_t->scope;
           resolve_expr(res, enum_scope, expr->binary.right);
           
-          Code_Type *member_type = 0;
+          b32 exists = false;
           for (u32 i = 0; i < sb_count(enum_t->members); i++) {
             String member = enum_t->members[i];
             if (string_compare(member, member_name)) {
-              member_type = enum_t->item_type;
+              exists = true;
               break;
             }
           }
-          assert(member_type);
-          check_types(res, member_type, expr->binary.right->type);
+          assert(exists);
           expr->type = (Code_Type *)code_type_alias(res.common->parser, enum_alias);
+          expr->type->alias.base = left_base;
         }
       } else {
         resolve_expr(res, scope, expr->binary.right);

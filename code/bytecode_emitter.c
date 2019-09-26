@@ -276,7 +276,7 @@ void bytecode_run(Arena *arena, Bc_Emitter *emitter) {
             
           }
           
-          // NOTE(lvl5): pop the return address off the exec, we don't need it
+          // NOTE(lvl5): pop the return instruction address off the exec, we don't need it
           exec_count--;
         } else {
           instr = (Bc_Instruction *)address._u64;
@@ -708,11 +708,11 @@ void bc_store_size(Bc_Emitter *e, i32 size) {
 
 
 void bc_emit_func_call(Bc_Emitter *e, Code_Expr_Call *call) {
-  Code_Type_Func *func = &call->func->type->func;
+  Code_Type_Func *func = &get_final_type(call->func->type)->func;
   
   i32 total_args_size = 0;
-  b32 is_void = get_final_type(func->return_type) != builtin_void;
-  if (is_void) {
+  b32 is_void = get_final_type(func->return_type) == builtin_void;
+  if (!is_void) {
     total_args_size += get_size_of_type(func->return_type);
   }
   
@@ -740,7 +740,7 @@ void bc_emit_func_call(Bc_Emitter *e, Code_Expr_Call *call) {
   
   bc_instruction(e, I_STACK_CHANGE, PARAM(i64, -e->current_func->stack_size));
   
-  if (is_void) {
+  if (!is_void) {
     // load the return value into the exec stack
     bc_instruction(e, I_CONST_STACK, PARAM(i64, e->current_func->stack_size));
     bc_instruction(e, I_LOAD, NULL_PARAM);
@@ -1007,7 +1007,7 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
       
       
       // NOTE(lvl5): handle main() entry point
-      b32 is_entry = string_compare(decl->name, const_string("__main"));
+      b32 is_entry = string_compare(decl->name, const_string("__entry"));
       if (is_entry) {
         e->entry_instruction_index = e->instruction_count;
       }
@@ -1046,8 +1046,6 @@ void bc_emit_decl(Bc_Emitter *e, Code_Stmt_Decl *decl, Resolve_State state) {
         }
         
         if (decl->storage_kind == Storage_Kind_BSS) {
-          // TODO(lvl5): this is wrong. we do have constant expressions
-          // on the stack and mutable in the BSS
           bc_instruction(e, I_CONST_BSS, PARAM(i64, decl->offset));
         } else if (decl->storage_kind == Storage_Kind_STACK) {
           bc_instruction(e, I_CONST_STACK, PARAM(i64, decl->offset));

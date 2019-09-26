@@ -1,8 +1,11 @@
 byte :: u8;
 b32 :: i32;
 b8 :: i8;
+char :: i8;
+size_t :: u64;
 
 Alloc_Op :: enum {
+  NONE;
   ALLOC;
   REALLOC;
   FREE;
@@ -17,6 +20,17 @@ Arena :: struct {
   size:     u64;
 }
 
+Context :: struct {
+  allocator:      Allocator;
+  allocator_data: *void;
+  scratch:        Arena;
+}
+
+alloc :: func(size: u64) *void {
+  result := ctx.allocator(size, Alloc_Op.ALLOC, ctx.allocator_data, null, 0, 4);
+  return result;
+}
+
 arena_make :: func(data: *void, capacity: u64) Arena {
   result: Arena;
   result.data = (*byte)(data);
@@ -24,49 +38,97 @@ arena_make :: func(data: *void, capacity: u64) Arena {
   return result;
 }
 
-Context :: struct {
-  allocator:      Allocator;
-  allocator_data: *void;
-  scratch:        Arena;
+arena_get_mark :: func(arena: *Arena) u64 {
+  result := arena.size;
+  return result;
 }
 
+arena_set_mark :: func(arena: *Arena, mark: u64) {
+  arena.size = mark;
+}
 
+memory_copy :: func(dst: *void, src: *void, size: u64) {
+  i : u64 = 0;
+  while i < size {
+    (*byte)(dst)[i] = (*byte)(src)[i];
+    i = i + 1;
+  }
+}
 
+arena_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *void, old_size: u64, align: u64) *byte {
+  //TODO: alignment
+  result: *byte = null;
+  
+  arena :: (*Arena)(allocator_data);
+  if op == Alloc_Op.ALLOC {
+    result = arena.data + arena.size;
+    arena.size += size;
+  } else if op == Alloc_Op.FREE_ALL {
+    arena.size = 0;
+  } else if op == Alloc_Op.REALLOC {
+    result = (*byte)(alloc(size));
+    memory_copy(result, old_ptr, old_size);
+  }
+  
+  return result;
+}
 
+scratch_allocator :: func(size: u64, op: Alloc_Op, allocator_data: *void, old_ptr: *void, old_size: u64, align: u64) *byte {
+  result := arena_allocator(size, op, *ctx.scratch, old_ptr, old_size, align);
+  return result;
+}
+
+scratch_alloc :: func(size: u64) *byte {
+  result := scratch_allocator(size, Alloc_Op.ALLOC, null, null, 0, 4);
+  return result;
+}
+
+scratch_reset :: func() {
+  ctx.scratch.size = 0;
+}
+
+putchar :: func(c: char) int #foreign putchar "ucrtbase.dll";
+puts :: func(str: *char) int #foreign puts "ucrtbase.dll";
 
 string :: struct {
-  data:  *i8;
+  data:  *char;
   count: u64;
 }
-
-__string_const :: func(data: *i8, count: u64) string {
+__string_const :: func(data: *char, count: u64) string {
   result: string;
   result.data = data; 
   result.count = count;
   return result;
 }
 
-print_char :: func(c: i8) #foreign putchar "ucrtbase.dll";
-puts :: func(str: *i8) #foreign puts  "ucrtbase.dll";
+
+scratch_c_string :: func(s: string) *char {
+  result := scratch_alloc(s.count + 1);
+  result[s.count] = 0;
+  return result;
+}
 
 string_print :: func(s: string) {
-  i: u64 = 0;
-  while i < s.count {
-    print_char(s.data[i]);
-    i = i + 1;
-  }
+  cstr := scratch_c_string(s);
+  puts(cstr);
+}
+
+
+__entry :: func() {
+  initial_ctx: Context;
+  
+  main_arena_capacity: u64 = 1024*1024*10;
+  main_arena := arena_make(__heap_begin, main_arena_capacity);
+  initial_ctx.allocator_data = *main_arena;
+  initial_ctx.allocator = arena_allocator;
+  
+  scratch_capacity: u64 = 1024*40;
+  initial_ctx.scratch = arena_make(alloc(scratch_capacity), scratch_capacity);
+  ctx = initial_ctx;
+  
+  main();
 }
 
 main :: func() {
-  ctx.scratch.size = 25;
-  if ctx.scratch.size == 25
-    string_print("stop this madness");
-  
-  foo := "Hello world!";
-  if foo.count > 20 {
-    puts(foo.data);
-  } else {
-    
-  }
+  string_print("Hello world");
 }
-

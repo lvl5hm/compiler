@@ -163,6 +163,13 @@ typedef struct {
   char value;
 } Code_Expr_Char;
 
+typedef struct Code_Stmt_Assign Code_Stmt_Assign;
+
+typedef struct {
+  Code_Stmt_Assign **members;
+  String name;
+} Code_Expr_Struct;
+
 typedef enum {
   Expr_Kind_NONE,
   
@@ -196,7 +203,7 @@ struct Code_Expr {
     Code_Expr_String string;
     Code_Expr_Char char_e;
     //Code_Expr_Array array;
-    //Code_Expr_Struct struct_e;
+    Code_Expr_Struct struct_e;
   };
   
   Code_Type *type;
@@ -215,12 +222,12 @@ typedef struct {
   i32 stack_size;
 } Code_Func;
 
-typedef struct {
+struct Code_Stmt_Assign {
   Code_Expr *left;
   Code_Expr *right;
   
   Token_Kind op;
-} Code_Stmt_Assign;
+};
 
 typedef struct {
   Code_Expr *expr;
@@ -278,6 +285,10 @@ typedef struct {
   Code_Stmt *body;
 } Code_Stmt_While;
 
+typedef struct {
+  Code_Stmt **statements;
+} Code_Stmt_Multi;
+
 typedef enum {
   Stmt_Kind_NONE,
   
@@ -289,6 +300,7 @@ typedef enum {
   Stmt_Kind_KEYWORD,
   Stmt_Kind_DECL,
   Stmt_Kind_WHILE,
+  Stmt_Kind_MULTI,
 } Stmt_Kind;
 
 struct Code_Stmt {
@@ -301,6 +313,7 @@ struct Code_Stmt {
     Code_Stmt_For for_s;
     Code_Stmt_Keyword keyword;
     Code_Stmt_Decl decl;
+    Code_Stmt_Multi multi;
   };
   Stmt_Kind kind;
 };
@@ -535,6 +548,13 @@ Code_Stmt_While *code_stmt_while(Parser *p, Code_Expr *cond, Code_Stmt *body) {
   return (Code_Stmt_While *)node;
 }
 
+Code_Stmt_Multi *code_stmt_multi(Parser *p, Code_Stmt **statements) {
+  Code_Node *node = code_node(p, Code_Kind_STMT);
+  node->stmt.kind = Stmt_Kind_MULTI;
+  node->stmt.multi.statements = statements;
+  return (Code_Stmt_Multi *)node;
+}
+
 Code_Stmt_If *code_stmt_if(Parser *p, Code_Expr *cond, Code_Stmt *then_branch, Code_Stmt *else_branch) {
   Code_Node *node = code_node(p, Code_Kind_STMT);
   node->stmt.kind = Stmt_Kind_IF;
@@ -576,4 +596,3 @@ Code_Stmt_Expr *code_stmt_expr(Parser *p, Code_Expr *expr) {
   node->stmt.expr.expr = expr;
   return (Code_Stmt_Expr *)node;
 }
-
