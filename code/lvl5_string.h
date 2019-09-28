@@ -146,6 +146,11 @@ b32 string_compare(String a, String b) {
 #include "stdarg.h"
 
 
+b32 string_is_empty(String str) {
+  b32 result = str.count == 0;
+  return result;
+}
+
 i32 string_to_i32(String str) {
   i32 result = 0;
   for (i32 i = 0; i < str.count; i++) {
@@ -372,26 +377,26 @@ struct String_Builder_Block {
 
 typedef struct {
   String_Builder_Block first;
-  String_Builder_Block *cur;
+  String_Builder_Block *last;
   u64 count_in_block;
   Arena *arena;
 } String_Builder;
 
 void builder_init(String_Builder *builder, Arena *arena) {
   builder->arena = arena;
-  builder->cur = &builder->first;
+  builder->last = &builder->first;
   builder->count_in_block = 0;
   builder->first.next = 0;
 }
 
 void builder_write(String_Builder *builder, String str) {
   for (i32 i = 0; i < str.count; i++) {
-    builder->cur->data[builder->count_in_block++] = str.data[i];
+    builder->last->data[builder->count_in_block++] = str.data[i];
     if (builder->count_in_block == STRING_BUILDER_BLOCK_MAX) {
       String_Builder_Block *next = arena_push_struct(builder->arena, String_Builder_Block);
       next->next = 0;
-      builder->cur->next = next;
-      builder->cur = next;
+      builder->last->next = next;
+      builder->last = next;
       builder->count_in_block = 0;
     }
   }

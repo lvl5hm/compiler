@@ -1,5 +1,7 @@
 #include "parser.h"
 
+
+
 Token ERROR_TOKEN = {0};
 
 Token parser_get(Parser *p, i32 offset) {
@@ -14,7 +16,7 @@ Token parser_get(Parser *p, i32 offset) {
 }
 
 
-void parser_error(Parser *p, Token t, char *fmt, ...) {
+void compiler_error(Parser *p, Token t, char *fmt, ...) {
 #define BUF_COUNT 256
   
   va_list args;
@@ -43,7 +45,8 @@ void parser_error(Parser *p, Token t, char *fmt, ...) {
   
   
   String err_string = concat(scratch_arena, make_string(buf, (u32)count-1), make_string(buf2, (u32)count2));
-  sb_push(p->errors, err_string);
+  
+  p->error = err_string;
 }
 
 
@@ -97,17 +100,17 @@ Token parser_expect(Parser *p, Token_Kind kind) {
     Token t = parser_get(p, 0);
     char *expected = Token_Kind_To_String[kind].data;
     char *got = to_c_string(p->arena, t.value);
-    parser_error(p, t, "Expected token \"%s\", got \"%s\" ", expected, got);
+    compiler_error(p, t, "Expected token \"%s\", got \"%s\" ", expected, got);
     p->i++;
   }
   return result;
 }
 
 
-Code_Expr *parse_expr(Parser *p);
-Code_Type *parse_type(Parser *p);
-Code_Stmt_Decl *parse_decl(Parser *p);
-Code_Stmt_Block *parse_stmt_block(Parser *p);
+Code_Node *parse_expr(Parser *p);
+Code_Node *parse_type(Parser *p);
+Code_Node *parse_decl(Parser *p);
+Code_Node *parse_stmt_block(Parser *p);
 
 void set_begin_end(void *nd, i32 begin, i32 end) {
   if (nd) {
@@ -117,15 +120,15 @@ void set_begin_end(void *nd, i32 begin, i32 end) {
   }
 }
 
-Code_Type_Func *parse_type_func(Parser *p) {
-  Code_Type_Func *result = 0;
+Code_Node *parse_type_func(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   parser_expect(p, T_FUNC);
   parser_expect(p, T_LPAREN);
   
-  Code_Stmt_Decl **params = sb_new(p->arena, Code_Stmt_Decl *, 8);
+  Code_Node **params = sb_new(p->arena, Code_Stmt_Decl *, 8);
   while (!parser_accept(p, T_RPAREN)) {
-    Code_Stmt_Decl *param = parse_decl(p);
+    Code_Node *param = parse_decl(p);
     sb_push(params, param);
     
     if (!parser_accept(p, T_COMMA)) {
@@ -134,9 +137,9 @@ Code_Type_Func *parse_type_func(Parser *p) {
     }
   }
   
-  Code_Type *return_type = parse_type(p);
+  Code_Node *return_type = parse_type(p);
   if (!return_type) {
-    return_type = (Code_Type *)code_type_alias(p, const_string("void"));
+    return_type = code_type_alias(p, const_string("void"));
   }
   
   result = code_type_func(p, params, return_type);
@@ -145,27 +148,34 @@ Code_Type_Func *parse_type_func(Parser *p) {
   return result;
 }
 
-Code_Type *parse_type(Parser *p) {
-  Code_Type *result = 0;
+Code_Node *parse_type(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   
   if (parser_accept(p, T_NAME)) {
     String name = parser_get(p, -1).value;
-    result = (Code_Type *)code_type_alias(p, name);
+    
+    // NOTE(lvl5): if this is one of the basic types, just set it
+    Scope_Entry *entry = scope_get(p->global_scope, name);
+    if (entry) {
+      result = entry->decl->s_decl.value;
+    } else {
+      result = code_type_alias(p, name);
+    }
   } else if (parser_accept(p, T_REF)) {
-    Code_Type *base = parse_type(p);
-    result = (Code_Type *)code_type_pointer(p, base);
+    Code_Node *base = parse_type(p);
+    result = code_type_pointer(p, base);
   } else if (parser_accept(p, T_STRUCT)) {
     parser_expect(p, T_LCURLY);
     
-    Code_Stmt_Decl **members = sb_new(p->arena, Code_Stmt_Decl *, 8);
+    Code_Node **members = sb_new(p->arena, Code_Stmt_Decl *, 8);
     while (!parser_accept(p, T_RCURLY)) {
-      Code_Stmt_Decl *member = parse_decl(p);
+      Code_Node *member = parse_decl(p);
       parser_expect(p, T_SEMI);
       sb_push(members, member);
     }
     
-    result = (Code_Type *)code_type_struct(p, members);
+    result = code_type_struct(p, members);
   } else if (parser_accept(p, T_ENUM)) {
     parser_expect(p, T_LCURLY);
     
@@ -175,18 +185,18 @@ Code_Type *parse_type(Parser *p) {
       parser_expect(p, T_SEMI);
       sb_push(members, member.value);
     }
-    result = (Code_Type *)code_type_enum(p, members);
+    result = code_type_enum(p, members);
   } else if (parser_accept(p, T_LBRACKET)) {
     Token t_count = parser_expect(p, T_INT);
     u64 count = string_to_u64(t_count.value);
     parser_expect(p, T_RBRACKET);
-    Code_Type *element_type = parse_type(p);
+    Code_Node *element_type = parse_type(p);
     
-    result = (Code_Type *)code_type_array(p, element_type, count);
+    result = code_type_array(p, element_type, count);
   } else if (parser_peek(p, 0, T_FUNC)) {
-    result = (Code_Type *)parse_type_func(p);
+    result = parse_type_func(p);
   } else if (parser_accept(p, T_LPAREN)) {
-    result = (Code_Type *)parse_type(p);
+    result = parse_type(p);
     parser_expect(p, T_RPAREN);
   }
   
@@ -194,18 +204,16 @@ Code_Type *parse_type(Parser *p) {
   return result;
 }
 
-Code_Stmt_Decl *parse_stmt_decl(Parser *p, b32 expect_semi) {
+Code_Node *parse_stmt_decl(Parser *p, b32 expect_semi) {
   i32 begin = p->i;
-  Code_Stmt_Decl *decl = parse_decl(p);
+  Code_Node *decl = parse_decl(p);
   
   if (expect_semi) {
-    Code_Node *value = decl->value;
+    Code_Node *value = decl->s_decl.value;
     if (value && 
         (value->kind == Code_Kind_FUNC ||
-         (value->kind == Code_Kind_EXPR &&
-          value->expr.kind == Expr_Kind_TYPE &&
-          (value->expr.type_e.kind == Type_Kind_STRUCT ||
-           value->expr.type_e.kind == Type_Kind_ENUM)))) {
+         value->kind == Code_Kind_TYPE_STRUCT ||
+         value->kind == Code_Kind_TYPE_ENUM)) {
       
     } else {
       parser_expect(p, T_SEMI);
@@ -216,47 +224,66 @@ Code_Stmt_Decl *parse_stmt_decl(Parser *p, b32 expect_semi) {
   return decl;
 }
 
-Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
-  Code_Stmt *result = 0;
+b32 is_expression(Code_Node *node) {
+  b32 result = node->kind >= Code_Kind_EXPR_FIRST &&
+    node->kind <= Code_Kind_EXPR_LAST;
+  return result;
+}
+
+b32 is_type(Code_Node *node) {
+  b32 result = node->kind >= Code_Kind_TYPE_FIRST &&
+    node->kind <= Code_Kind_TYPE_LAST;
+  return result;
+}
+
+b32 is_statement(Code_Node *node) {
+  b32 result = node->kind >= Code_Kind_STMT_FIRST &&
+    node->kind <= Code_Kind_STMT_LAST;
+  return result;
+}
+
+Code_Node *parse_stmt(Parser *p, b32 expect_semi) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   
   if (parser_peek(p, 0, T_NAME) && parser_peek(p, 1, T_COLON)) {
-    result = (Code_Stmt *)parse_stmt_decl(p, expect_semi);
+    result = parse_stmt_decl(p, expect_semi);
   } else if (parser_accept(p, T_IF)) {
-    Code_Expr *cond = parse_expr(p);
-    Code_Stmt *then_branch = parse_stmt(p, true);
-    Code_Stmt *else_branch = 0;
+    Code_Node *cond = parse_expr(p);
+    Code_Node *then_branch = parse_stmt(p, true);
+    Code_Node *else_branch = 0;
     if (parser_accept(p, T_ELSE)) {
       else_branch = parse_stmt(p, true);
     }
-    result = (Code_Stmt *)code_stmt_if(p, cond, then_branch, else_branch);
+    result = code_stmt_if(p, cond, then_branch, else_branch);
   } else if (parser_accept(p, T_WHILE)) {
-    Code_Expr *cond = parse_expr(p);
-    Code_Stmt *body = parse_stmt(p, true);
-    result = (Code_Stmt *)code_stmt_while(p, cond, body);
+    Code_Node *cond = parse_expr(p);
+    Code_Node *body = parse_stmt(p, true);
+    result = code_stmt_while(p, cond, body);
   } else if (parser_accept(p, T_FOR)) {
-    Code_Stmt *init = parse_stmt(p, false);
+    Code_Node *init = parse_stmt(p, false);
     
-    if (init->kind == Stmt_Kind_EXPR &&
+    if (init->kind == Code_Kind_STMT_EXPR &&
         parser_accept(p, T_DOUBLE_DOT)) {
-      Code_Expr *min = init->expr.expr;
-      Code_Expr *max = parse_expr(p);
-      init = (Code_Stmt *)code_stmt_decl(p, const_string("it"), null, (Code_Node *)min, false);
+      Code_Node *min = init;
+      Code_Node *max = parse_expr(p);
+      init = code_stmt_decl(p, const_string("it"), null, min, false);
       
-      Code_Expr *it_name = (Code_Expr *)code_expr_name(p, const_string("it"));
-      Code_Expr *cond = (Code_Expr *)code_expr_binary(p, it_name, T_LESS, max);
-      Code_Stmt *post = (Code_Stmt *)code_stmt_assign(p, it_name, T_ADD_ASSIGN, (Code_Expr *)code_expr_int(p, 1, 7));
+      Code_Node *it_name = code_expr_name(p, const_string("it"));
+      Code_Node *cond = code_expr_binary(p, it_name, T_LESS, max);
+      Code_Node *post = code_stmt_assign(p, it_name, T_ADD_ASSIGN,
+                                         code_expr_int(p, 1));
       
-      Code_Stmt *body = parse_stmt(p, true);
-      result = (Code_Stmt *)code_stmt_for(p, init, cond, post, body);
+      Code_Node *body = parse_stmt(p, true);
+      result = code_stmt_for(p, init, cond, post, body);
     } else {
       parser_expect(p, T_SEMI);
-      Code_Expr *cond = parse_expr(p);
+      Code_Node *cond = parse_expr(p);
       parser_expect(p, T_SEMI);
-      Code_Stmt *post = parse_stmt(p, false);
-      Code_Stmt *body = parse_stmt(p, true);
+      Code_Node *post = parse_stmt(p, false);
+      Code_Node *body = parse_stmt(p, true);
       
-      result = (Code_Stmt *)code_stmt_for(p, init, cond, post, body);
+      result = code_stmt_for(p, init, cond, post, body);
     }
   } else if (parser_peek(p, 0, T_RETURN) ||
              parser_peek(p, 0, T_BREAK) ||
@@ -265,27 +292,27 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
     Token_Kind keyword = parser_get(p, 0).kind;
     parser_expect(p, keyword);
     
-    Code_Stmt *stmt = 0;
+    Code_Node *stmt = 0;
     if (!parser_peek(p, 0, T_SEMI)) {
       stmt = parse_stmt(p, true);
     }
-    result = (Code_Stmt *)code_stmt_keyword(p, keyword, stmt, null);
+    result = code_stmt_keyword(p, keyword, stmt, null);
   } else if (parser_peek(p, 0, T_PUSH_CONTEXT)) {
     parser_expect(p, T_PUSH_CONTEXT);
-    Code_Expr *extra = parse_expr(p);
-    Code_Stmt *stmt = parse_stmt(p, true);
-    result = (Code_Stmt *)code_stmt_keyword(p, T_PUSH_CONTEXT, stmt, extra);
+    Code_Node *extra = parse_expr(p);
+    Code_Node *stmt = parse_stmt(p, true);
+    result = code_stmt_keyword(p, T_PUSH_CONTEXT, stmt, extra);
   } else if (parser_peek(p, 0, T_LCURLY)) {
-    result = (Code_Stmt *)parse_stmt_block(p);
+    result = parse_stmt_block(p);
   } else {
-    Code_Expr *left = parse_expr(p);
+    Code_Node *left = parse_expr(p);
     if (parser_peek_range(p, 0, T_ASSIGN_FIRST, T_ASSIGN_LAST)) {
       Token_Kind op = parser_get(p, 0).kind;
       parser_expect(p, op);
-      Code_Expr *right = parse_expr(p);
-      result = (Code_Stmt *)code_stmt_assign(p, left, op, right);
+      Code_Node *right = parse_expr(p);
+      result = code_stmt_assign(p, left, op, right);
     } else {
-      result = (Code_Stmt *)code_stmt_expr(p, left);
+      result = code_stmt_expr(p, left);
     }
     if (expect_semi) {
       parser_expect(p, T_SEMI);
@@ -296,87 +323,65 @@ Code_Stmt *parse_stmt(Parser *p, b32 expect_semi) {
   return result;
 }
 
-Code_Expr *parse_expr_atom(Parser *p) {
-  Code_Expr *result = 0;
+Code_Node *parse_expr_atom(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   
   if (parser_accept(p, T_LPAREN)) {
-    Code_Expr *inner = parse_expr(p);
+    Code_Node *inner = parse_expr(p);
     parser_expect(p, T_RPAREN);
     result = inner;
   } else if (parser_accept(p, T_NAME)) {
     String name = parser_prev(p).value;
-    result = (Code_Expr *)code_expr_name(p, name);
+    result = code_expr_name(p, name);
   } else if (parser_accept(p, T_INT)) {
     u64 value = string_to_u64(parser_prev(p).value);
-    
-    // TODO(lvl5): this seems to be kinda stupid
-    // you can deduce the size later
-    i32 size = 0;
-    if (value <= I8_MAX) {
-      size = 7;
-    } else if (value <= U8_MAX) {
-      size = 8;
-    } else if (value <= I16_MAX) {
-      size = 15;
-    } else if (value <= U16_MAX) {
-      size = 16;
-    } else if (value <= I32_MAX) {
-      size = 31;
-    } else if (value <= U32_MAX) {
-      size = 32;
-    } else if (value <= I64_MAX) {
-      size = 63;
-    }  else {
-      size = 64;
-    }
-    
-    result = (Code_Expr *)code_expr_int(p, value, size);
+    result = code_expr_int(p, value);
   } else if (parser_accept(p, T_FLOAT)) {
     f64 value = string_to_f64(parser_prev(p).value);
-    result = (Code_Expr *)code_expr_float(p, value);
+    result = code_expr_float(p, value);
   } else if (parser_accept(p, T_STRING)) {
     String value = parser_prev(p).value;
     value.data++;
     value.count -= 2;
-    result = (Code_Expr *)code_expr_string(p, value);
+    result = code_expr_string(p, value);
   } else if (parser_accept(p, T_NULL)) {
-    result = (Code_Expr *)code_expr_null(p);
+    result = code_expr_null(p);
   } else if (parser_accept(p, T_CHAR)) {
     Token tok_char = parser_prev(p);
-    result = (Code_Expr *)code_expr_char(p, tok_char.value.data[1]);
+    result = code_expr_char(p, tok_char.value.data[1]);
   } else {
-    result = (Code_Expr *)parse_type(p);
+    result = parse_type(p);
   }
   
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Expr *parse_expr_call(Parser *p) {
-  Code_Expr *result = 0;
+Code_Node *parse_expr_call(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   
   result = parse_expr_atom(p);
   while (true) {
     if (parser_accept(p, T_DOT)) {
-      Code_Expr *right = parse_expr_atom(p);
-      result = (Code_Expr *)code_expr_binary(p, result, T_MEMBER, right);
+      Code_Node *right = parse_expr_atom(p);
+      result = code_expr_binary(p, result, T_MEMBER, right);
     } else if (parser_accept(p, T_LBRACKET)) {
-      Code_Expr *right = parse_expr(p);
+      Code_Node *right = parse_expr(p);
       parser_expect(p, T_RBRACKET);
-      result = (Code_Expr *)code_expr_binary(p, result, T_SUBSCRIPT, right);
+      result = code_expr_binary(p, result, T_SUBSCRIPT, right);
     } else if (parser_accept(p, T_LPAREN)) {
-      Code_Expr **args = sb_new(p->arena, Code_Expr *, 8);
+      Code_Node **args = sb_new(p->arena, Code_Expr *, 8);
       while (!parser_accept(p, T_RPAREN)) {
-        Code_Expr *arg = parse_expr(p);
+        Code_Node *arg = parse_expr(p);
         sb_push(args, arg);
         if (!parser_accept(p, T_COMMA)) {
           parser_expect(p, T_RPAREN);
           break;
         }
       }
-      result = (Code_Expr *)code_expr_call(p, result, args);
+      result = code_expr_call(p, result, args);
     } else {
       break;
     }
@@ -386,8 +391,8 @@ Code_Expr *parse_expr_call(Parser *p) {
   return result;
 }
 
-Code_Expr *parse_expr_unary(Parser *p) {
-  Code_Expr *result = 0;
+Code_Node *parse_expr_unary(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   
   if (parser_accept(p, T_SUB) ||
@@ -396,8 +401,8 @@ Code_Expr *parse_expr_unary(Parser *p) {
       parser_accept(p, T_LESS) ||
       parser_accept(p, T_REF)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *expr = parse_expr_unary(p);
-    result = (Code_Expr *)code_expr_unary(p, op, expr);
+    Code_Node *expr = parse_expr_unary(p);
+    result = code_expr_unary(p, op, expr);
   } else {
     result = parse_expr_call(p);
   }
@@ -405,73 +410,73 @@ Code_Expr *parse_expr_unary(Parser *p) {
   return result;
 }
 
-Code_Expr *parse_expr_mul(Parser *p) {
+Code_Node *parse_expr_mul(Parser *p) {
   i32 begin = p->i;
-  Code_Expr *result = parse_expr_unary(p);
+  Code_Node *result = parse_expr_unary(p);
   if (parser_accept_range(p, T_STAR_FIRST, T_STAR_LAST)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *right = parse_expr_mul(p);
-    result = (Code_Expr *)code_expr_binary(p, result, op, right);
+    Code_Node *right = parse_expr_mul(p);
+    result = code_expr_binary(p, result, op, right);
   }
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Expr *parse_expr_plus(Parser *p) {
+Code_Node *parse_expr_plus(Parser *p) {
   i32 begin = p->i;
-  Code_Expr *result = parse_expr_mul(p);
+  Code_Node *result = parse_expr_mul(p);
   if (parser_accept_range(p, T_PLUS_FIRST, T_PLUS_LAST)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *right = parse_expr_plus(p);
-    result = (Code_Expr *)code_expr_binary(p, result, op, right);
+    Code_Node *right = parse_expr_plus(p);
+    result = code_expr_binary(p, result, op, right);
   }
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Expr *parse_expr_comp(Parser *p) {
+Code_Node *parse_expr_comp(Parser *p) {
   i32 begin = p->i;
-  Code_Expr *result = parse_expr_plus(p);
+  Code_Node *result = parse_expr_plus(p);
   if (parser_accept_range(p, T_COMP_FIRST, T_COMP_LAST)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *right = parse_expr_comp(p);
-    result = (Code_Expr *)code_expr_binary(p, result, op, right);
+    Code_Node *right = parse_expr_comp(p);
+    result = code_expr_binary(p, result, op, right);
   }
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Expr *parse_expr_and(Parser *p) {
+Code_Node *parse_expr_and(Parser *p) {
   i32 begin = p->i;
-  Code_Expr *result = parse_expr_comp(p);
+  Code_Node *result = parse_expr_comp(p);
   if (parser_accept(p, T_AND)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *right = parse_expr_and(p);
-    result = (Code_Expr *)code_expr_binary(p, result, op, right);
+    Code_Node *right = parse_expr_and(p);
+    result = code_expr_binary(p, result, op, right);
   }
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Expr *parse_expr(Parser *p) {
+Code_Node *parse_expr(Parser *p) {
   i32 begin = p->i;
-  Code_Expr *result = parse_expr_and(p);
+  Code_Node *result = parse_expr_and(p);
   if (parser_accept(p, T_OR)) {
     Token_Kind op = parser_prev(p).kind;
-    Code_Expr *right = parse_expr(p);
-    result = (Code_Expr *)code_expr_binary(p, result, op, right);
+    Code_Node *right = parse_expr(p);
+    result = code_expr_binary(p, result, op, right);
   }
   set_begin_end(result, begin, p->i-1);
   return result;
 }
 
-Code_Stmt_Block *parse_stmt_block(Parser *p) {
-  Code_Stmt_Block *result = 0;
+Code_Node *parse_stmt_block(Parser *p) {
+  Code_Node *result = 0;
   i32 begin = p->i;
   parser_expect(p, T_LCURLY);
-  Code_Stmt **statements = sb_new(p->arena, Code_Stmt *, 32);
+  Code_Node **statements = sb_new(p->arena, Code_Stmt *, 32);
   while (!parser_accept(p, T_RCURLY)) {
-    Code_Stmt *st = parse_stmt(p, true);
+    Code_Node *st = parse_stmt(p, true);
     sb_push(statements, st);
   }
   result = code_stmt_block(p, statements);
@@ -480,15 +485,15 @@ Code_Stmt_Block *parse_stmt_block(Parser *p) {
 }
 
 
-Code_Stmt_Decl *parse_decl(Parser *p) {
+Code_Node *parse_decl(Parser *p) {
   i32 begin = p->i;
-  Code_Stmt_Decl *result = 0;
+  Code_Node *result = 0;
   Token t_name = parser_expect(p, T_NAME);
   parser_expect(p, T_COLON);
   
   String name = t_name.value;
   
-  Code_Type *type = 0;
+  Code_Node *type = 0;
   Code_Node *value = 0;
   
   if (!parser_peek(p, 0, T_ASSIGN) &&
@@ -505,10 +510,10 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
     }
     
     if (parser_peek(p, 0, T_FUNC)) {
-      Code_Type_Func *sig = parse_type_func(p);
+      Code_Node *sig = parse_type_func(p);
       if (parser_peek(p, 0, T_LCURLY)) {
-        Code_Stmt_Block *body = parse_stmt_block(p);
-        value = (Code_Node *)code_func(p, sig, body, false);
+        Code_Node *body = parse_stmt_block(p);
+        value = code_func(p, sig, body, false);
       } else if (parser_accept(p, T_POUND)) {
         Token t = parser_get(p, -1);
         if (string_compare(t.value, const_string("foreign"))) {
@@ -517,8 +522,9 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
             foreign_name = parser_prev(p).value;
           }
           Token tok_module = parser_expect(p, T_STRING);
-          Code_Func *func = code_func(p, sig, null, true);
+          Code_Func *func = &code_func(p, sig, null, true)->func;
           func->module = tok_module.value;
+          // NOTE(lvl5): trim the string
           func->module.data++;
           func->module.count -= 2;
           func->foreign_name = foreign_name;
@@ -540,10 +546,10 @@ Code_Stmt_Decl *parse_decl(Parser *p) {
   return result;
 }
 
-Code_Stmt_Decl **parse_program(Parser *p) {
-  Code_Stmt_Decl **result = sb_new(p->arena, Code_Stmt_Decl *, 64);
-  while (p->i < sb_count(p->tokens) && sb_count(p->errors) == 0) {
-    Code_Stmt_Decl *decl = parse_stmt_decl(p, true);
+Code_Node **parse_program(Parser *p) {
+  Code_Node **result = sb_new(p->arena, Code_Node *, 64);
+  while (p->i < sb_count(p->tokens) && string_is_empty(p->error)) {
+    Code_Node *decl = parse_stmt_decl(p, true);
     
     sb_push(result, decl);
   }

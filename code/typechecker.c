@@ -22,11 +22,6 @@ Code_Type *builtin_string = 0;
 #define ADD_CTX_PARAM true
 
 
-char *tcstring(String str) {
-  char *result = to_c_string(scratch_arena, str);
-  return result;
-}
-
 typedef struct C_Emitter C_Emitter;
 typedef struct Bc_Emitter Bc_Emitter;
 
@@ -995,11 +990,6 @@ void resolve_and_emit_decl(Resolver res, Scope *scope, Code_Stmt_Decl *decl, Res
       }
     } else {
       bc_emit_decl(res.common->bc_emitter, decl, Resolve_State_FULL);
-#if 0
-      if (decl->emit_state < state) {
-        emit_top_decl(res.emitter, decl, state);
-      }
-#endif
     }
   }
 }
